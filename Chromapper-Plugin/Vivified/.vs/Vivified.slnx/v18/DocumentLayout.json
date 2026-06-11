@@ -1,0 +1,37 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\ninja\\OneDrive\\Documents\\GitHub\\Vivified\\Chromapper-Plugin\\Vivified\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{C8BF36A3-6AFC-455C-BE00-4F78136B3BC5}|Vivified.csproj|c:\\users\\ninja\\onedrive\\documents\\github\\vivified\\chromapper-plugin\\vivified\\class1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{C8BF36A3-6AFC-455C-BE00-4F78136B3BC5}|Vivified.csproj|solutionrelative:class1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Class1.cs",
+              "DocumentMoniker": "C:\\Users\\ninja\\OneDrive\\Documents\\GitHub\\Vivified\\Chromapper-Plugin\\Vivified\\Class1.cs",
+              "RelativeDocumentMoniker": "Class1.cs",
+              "ToolTip": "C:\\Users\\ninja\\OneDrive\\Documents\\GitHub\\Vivified\\Chromapper-Plugin\\Vivified\\Class1.cs",
+              "RelativeToolTip": "Class1.cs",
+              "ViewState": "AgIAAAMAAAAAAAAAAAAAAAUAAAASAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-06-11T19:54:05.06Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
