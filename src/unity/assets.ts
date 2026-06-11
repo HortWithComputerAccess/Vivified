@@ -19,6 +19,7 @@ export const ClassID = {
   TextAsset: 49,
   AudioClip: 83,
   Animator: 95,
+  AnimatorController: 91,
   AnimationClip: 74,
   Light: 108,
   MonoBehaviour: 114,
@@ -172,6 +173,12 @@ export interface UGameObject {
   transform: UTransform;
   meshPathID: number | null;
   materialPathIDs: number[];
+  /** Animator's AnimatorController pathID, if this object has one */
+  animatorControllerPathID: number | null;
+  /** ParticleSystem component pathID, if present */
+  particleSystemPathID: number | null;
+  /** materials on the ParticleSystemRenderer */
+  particleMaterialPathIDs: number[];
   /** class IDs of non-renderer components, for badges/diagnostics */
   componentClasses: number[];
   children: UGameObject[];
@@ -193,6 +200,9 @@ export function buildGameObjectTree(db: AssetDB, goPathID: number): UGameObject 
     },
     meshPathID: null,
     materialPathIDs: [],
+    animatorControllerPathID: null,
+    particleSystemPathID: null,
+    particleMaterialPathIDs: [],
     componentClasses: [],
     children: [],
   };
@@ -217,6 +227,20 @@ export function buildGameObjectTree(db: AssetDB, goPathID: number): UGameObject 
       }
       for (const mat of mr?.m_Materials ?? []) {
         if (mat?.m_PathID) result.materialPathIDs.push(mat.m_PathID);
+      }
+    } else if (cls === ClassID.Animator) {
+      const animator = db.deref(comp) as any;
+      if (animator?.m_Controller?.m_PathID) {
+        result.animatorControllerPathID = animator.m_Controller.m_PathID;
+      }
+      result.componentClasses.push(cls);
+    } else if (cls === ClassID.ParticleSystem) {
+      result.particleSystemPathID = comp.m_PathID;
+      result.componentClasses.push(cls);
+    } else if (cls === ClassID.ParticleSystemRenderer) {
+      const pr = db.deref(comp) as any;
+      for (const mat of pr?.m_Materials ?? []) {
+        if (mat?.m_PathID) result.particleMaterialPathIDs.push(mat.m_PathID);
       }
     } else {
       result.componentClasses.push(cls);

@@ -30,6 +30,8 @@ export interface DifficultyRef {
   startBeatOffset: number;
   colorLeft: { r: number; g: number; b: number } | null;
   colorRight: { r: number; g: number; b: number } | null;
+  envColorLeft: { r: number; g: number; b: number } | null;
+  envColorRight: { r: number; g: number; b: number } | null;
 }
 
 export interface InfoDat {

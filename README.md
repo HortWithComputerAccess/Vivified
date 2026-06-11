@@ -35,8 +35,8 @@ Use **Chrome or Edge** — saving in place uses the File System Access API
 | **Animate visually** | Toggle **●Key** (auto-key): every gizmo edit writes an `AnimateTrack` keyframe at the current beat. Or press **K**/**+Key** to key the current pose. Keys appear as diamonds on the timeline; the event window and normalized keyframe times are managed for you. |
 | Edit materials | Click a material in the Assets tab: shows the shader, how it was recreated (additive/alpha/opaque), and live-editable colors/floats. **+ SetMaterialProperty @ beat** turns your edits into an event. |
 | Inspect textures | Click a texture in the Assets tab for a full preview (DXT1/5, BC4/5, BC7 and uncompressed formats decode in-browser). |
-| Notes preview | **Notes** toggles notes flying at the player with correct jump math, skinned by `AssignObjectPrefab` prefabs from the bundle. |
-| Player POV | **POV** switches to the player's first-person view, following `AssignPlayerToTrack` animation. |
+| Notes preview | **Notes** toggles notes, bombs, chains and walls flying at the player with correct jump math, map color scheme, Noodle coordinates, and `AssignObjectPrefab` note skins tinted per color. Note tracks follow `AssignPathAnimation` offsetPosition and `AnimateTrack` offset/dissolve/scale. |
+| Player POV | **POV** switches to the player's first-person view, following `AssignPlayerToTrack` animation, with sabers (custom saber prefabs when assigned). |
 
 The viewport evaluates the Heck animation engine over time: `AnimateTrack`
 (position/rotation/scale/dissolve with point definitions, easings, splines, repeat),
@@ -45,10 +45,22 @@ The viewport evaluates the Heck animation engine over time: `AnimateTrack`
 
 **Shader recreation:** the editor parses each shader's serialized render state
 (blend factors — including material-property-driven ones — culling, depth write,
-render queue) and rebuilds the equivalent Three.js material: additive glow,
-alpha blending, multiply, or a standard lit fallback when the state is opaque
-or unavailable. Compiled HLSL can't run in the browser, so custom vertex
-animation and post-processing still need the game for an exact look.
+lighting flag, render queue) and rebuilds the equivalent Three.js material:
+additive glow, alpha blending, multiply, unlit full-bright for non-lit/VFX/HDR
+shaders, or a standard lit fallback. Compiled HLSL can't run in the browser, so
+custom vertex animation and post-processing still need the game for an exact
+look — active `Blit`/camera effects are listed in the viewport HUD instead.
+
+**Also recreated in the browser view:**
+- Unity **AnimationClips**: prefabs with Animators play their controller's
+  clip (position/rotation/scale curves by path, looped, synced to song time).
+- **Particle systems**: each emitter renders an approximated particle cloud
+  (shape, rate, lifetime, speed, size, start color, gravity, renderer
+  material/texture and blending) animated with song time.
+- **SetRenderingSettings** fog distances and ambient intensity applied to the
+  scene live, with duration/easing.
+- **Lighting events** (types 0–5) tint the scene lights using the difficulty's
+  environment colors and Chroma per-event colors, with flash/fade decay.
 
 ## What it can't do (yet)
 

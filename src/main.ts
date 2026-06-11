@@ -21,6 +21,7 @@ import { EventListPanel, Inspector, AssetBrowser, makeEventFromTemplate } from '
 import { SongPlayer } from './editor/audio';
 import { NotesPreview } from './editor/notes';
 import { MaterialAnimator } from './anim/materialAnim';
+import { EnvironmentFx } from './editor/environmentFx';
 import { writeTransformKeys, listKeys } from './editor/keyframes';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -45,7 +46,10 @@ const assetBrowser = new AssetBrowser($('#asset-browser'));
 const player = new SongPlayer();
 const notes = new NotesPreview();
 const matAnim = new MaterialAnimator();
+const envFx = new EnvironmentFx();
 viewport.scene.add(notes.group);
+viewport.camera.add(notes.saberGroup);
+viewport.scene.add(viewport.camera);
 
 let converter: ThreeConverter | null = null;
 let autoKey = false;
@@ -100,6 +104,7 @@ function afterEventsChanged(keepSelected: CustomEvent | null): void {
   eventList.setEvents(events());
   notes.rebuildSkins(events());
   matAnim.rebuild(events(), diff.data.customData?.pointDefinitions ?? {});
+  envFx.rebuild(diff.data, events());
   refreshKeyDiamonds();
   if (keepSelected && events().includes(keepSelected)) {
     selectEvent(keepSelected, false);
@@ -162,7 +167,31 @@ function updateHud(): void {
     lines.push(`${events().length} custom events · ${engine.instances.length} prefab spawns · ${act} active`);
   }
   if (db) lines.push(`bundle: ${db.containers.length} assets`);
+  // screen effects can't be recreated; list what would be active right now
+  for (const fx of activeScreenEffects()) {
+    lines.push(`<span style="color:#d6c05a">▶ ${fx}</span>`);
+  }
   hud.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
+}
+
+/** Blit / camera events active at the current beat (not renderable here). */
+function activeScreenEffects(): string[] {
+  const out: string[] = [];
+  for (const ev of events()) {
+    const b = ev.b ?? 0;
+    if (ev.t === 'Blit') {
+      const dur = typeof ev.d?.duration === 'number' ? ev.d.duration : 0;
+      if (b <= beat && (dur === 0 ? beat - b < 0.5 : beat < b + dur)) {
+        out.push(`Blit ${String(ev.d?.asset ?? '').split('/').pop() ?? ''}${dur ? ` (${(b + dur - beat).toFixed(1)} beats left)` : ''}`);
+      }
+    } else if (ev.t === 'CreateCamera' && b <= beat) {
+      out.push(`Camera "${ev.d?.id ?? '?'}"${ev.d?.texture ? ` → ${ev.d.texture}` : ''}`);
+    } else if (ev.t === 'CreateScreenTexture' && b <= beat) {
+      out.push(`ScreenTexture "${ev.d?.id ?? '?'}"`);
+    }
+    if (out.length >= 6) break;
+  }
+  return out;
 }
 
 // --- loading ---------------------------------------------------------------
@@ -230,6 +259,7 @@ async function doLoadDifficulty(index: number): Promise<void> {
       right: ref.colorRight,
     });
     notes.rebuild(diff.data);
+    envFx.setEnvColors(ref.envColorLeft ?? ref.colorLeft, ref.envColorRight ?? ref.colorRight);
     undoStack.length = 0;
     redoStack.length = 0;
     dirty = false;
@@ -592,9 +622,11 @@ function frame(): void {
   } else if (playBtn.textContent !== '▶') {
     playBtn.textContent = '▶';
   }
-  viewport.update(engine, beat);
-  notes.update(beat);
+  const songSeconds = bpm.secondsAt(beat);
+  viewport.update(engine, beat, songSeconds);
+  notes.update(beat, engine, viewport.povMode);
   matAnim.apply(converter, beat);
+  envFx.apply(viewport.scene, viewport.lights, beat);
   if (viewport.povMode && engine) {
     let pos: [number, number, number] | null = null;
     let rot: [number, number, number] | null = null;
@@ -605,8 +637,10 @@ function frame(): void {
     }
     viewport.applyPovPose(pos, rot);
   }
+  if (++hudFrame % 20 === 0) updateHud();
   viewport.render();
 }
+let hudFrame = 0;
 frame();
 
 status('ready — open a map folder (needs Info.dat) or a .vivify bundle');

@@ -84,6 +84,8 @@ async function buildLoadedMap(
         startBeatOffset: Number(d._noteJumpStartBeatOffset ?? 0),
         colorLeft: d._customData?._colorLeft ?? null,
         colorRight: d._customData?._colorRight ?? null,
+        envColorLeft: d._customData?._envColorLeft ?? null,
+        envColorRight: d._customData?._envColorRight ?? null,
       });
     }
   }

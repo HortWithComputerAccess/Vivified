@@ -5,10 +5,13 @@ import { parsePointDef, samplePointDef, sampleRotation, PointDef } from './point
 export interface TransformState {
   position: [number, number, number] | null;
   localPosition: [number, number, number] | null;
+  offsetPosition: [number, number, number] | null;
   rotation: [number, number, number] | null; // euler degrees (unity)
   localRotation: [number, number, number] | null;
+  offsetWorldRotation: [number, number, number] | null;
   scale: [number, number, number] | null;
   dissolve: number | null;
+  dissolveArrow: number | null;
 }
 
 export interface PrefabInstance {
@@ -33,15 +36,28 @@ interface PropTimelineEntry {
   def: PointDef;
 }
 
-const TRANSFORM_PROPS = ['position', 'localPosition', 'rotation', 'localRotation', 'scale', 'dissolve'] as const;
+const TRANSFORM_PROPS = [
+  'position',
+  'localPosition',
+  'offsetPosition',
+  'rotation',
+  'localRotation',
+  'offsetWorldRotation',
+  'scale',
+  'dissolve',
+  'dissolveArrow',
+] as const;
 type TransformProp = (typeof TRANSFORM_PROPS)[number];
 const PROP_DIMS: Record<TransformProp, number> = {
   position: 3,
   localPosition: 3,
+  offsetPosition: 3,
   rotation: 3,
   localRotation: 3,
+  offsetWorldRotation: 3,
   scale: 3,
   dissolve: 1,
+  dissolveArrow: 1,
 };
 
 /**
@@ -52,6 +68,8 @@ export class TrackEngine {
   instances: PrefabInstance[] = [];
   /** track -> property -> sorted AnimateTrack segments */
   private timelines = new Map<string, Map<TransformProp, PropTimelineEntry[]>>();
+  /** track -> property -> sorted AssignPathAnimation entries */
+  private paths = new Map<string, Map<TransformProp, { beat: number; def: PointDef }[]>>();
   /** child track -> parent track */
   parents = new Map<string, string>();
   /** tracks assigned to the player via AssignPlayerToTrack */
@@ -69,6 +87,7 @@ export class TrackEngine {
   rebuild(events: CustomEvent[]): void {
     this.instances = [];
     this.timelines.clear();
+    this.paths.clear();
     this.parents.clear();
     this.playerTracks = [];
 
@@ -129,6 +148,28 @@ export class TrackEngine {
           }
           break;
         }
+        case 'AssignPathAnimation': {
+          const tracks = asStringArray(d.track);
+          for (const prop of TRANSFORM_PROPS) {
+            if (!(prop in d)) continue;
+            const def = parsePointDef(d[prop], PROP_DIMS[prop], this.pointDefinitions);
+            if (!def) continue;
+            for (const track of tracks) {
+              let perTrack = this.paths.get(track);
+              if (!perTrack) {
+                perTrack = new Map();
+                this.paths.set(track, perTrack);
+              }
+              let list = perTrack.get(prop);
+              if (!list) {
+                list = [];
+                perTrack.set(prop, list);
+              }
+              list.push({ beat: ev.b ?? 0, def });
+            }
+          }
+          break;
+        }
         case 'AssignTrackParent': {
           const parent = String(d.parentTrack ?? '');
           for (const child of asStringArray(d.childrenTracks)) {
@@ -168,15 +209,41 @@ export class TrackEngine {
     return [...names].sort();
   }
 
+  /**
+   * Sample a path animation (AssignPathAnimation) for a track property at a
+   * note's life time (0 = spawn, 0.5 = at player, 1 = despawn). Uses the
+   * latest path assigned at or before `beat`.
+   */
+  evaluatePath(track: string, prop: keyof TransformState, beat: number, lifeT: number): number[] | null {
+    const perTrack = this.paths.get(track);
+    const list = perTrack?.get(prop as TransformProp);
+    if (!list || list.length === 0) return null;
+    let entry: { beat: number; def: PointDef } | null = null;
+    for (const e of list) {
+      if (e.beat <= beat) entry = e;
+      else break;
+    }
+    if (!entry) return null;
+    return samplePointDef(entry.def, Math.min(Math.max(lifeT, 0), 1));
+  }
+
+  /** True if a track has any path animation for the given property. */
+  hasPath(track: string): boolean {
+    return this.paths.has(track);
+  }
+
   /** Evaluate the animated transform state of a track at a beat. */
   evaluate(track: string, beat: number): TransformState {
     const state: TransformState = {
       position: null,
       localPosition: null,
+      offsetPosition: null,
       rotation: null,
       localRotation: null,
+      offsetWorldRotation: null,
       scale: null,
       dissolve: null,
+      dissolveArrow: null,
     };
     const perTrack = this.timelines.get(track);
     if (!perTrack) return state;
@@ -206,12 +273,12 @@ export class TrackEngine {
       }
       s = ease(entry.easing, Math.min(Math.max(s, 0), 1));
 
-      if (prop === 'rotation' || prop === 'localRotation') {
+      if (prop === 'rotation' || prop === 'localRotation' || prop === 'offsetWorldRotation') {
         const v = sampleRotation(entry.def, s);
         if (v) state[prop] = v;
-      } else if (prop === 'dissolve') {
+      } else if (prop === 'dissolve' || prop === 'dissolveArrow') {
         const v = samplePointDef(entry.def, s);
-        if (v) state.dissolve = v[0];
+        if (v) state[prop] = v[0];
       } else {
         const v = samplePointDef(entry.def, s);
         if (v) state[prop] = [v[0], v[1], v[2]];

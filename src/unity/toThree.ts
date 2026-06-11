@@ -4,6 +4,11 @@ import { parseMesh } from './mesh';
 import { parseMaterial, ParsedMaterial } from './material';
 import { decodeTexture } from './texture';
 import { parseShader, resolveBlend, ShaderInfo } from './shader';
+import { clipForController } from './animationClip';
+import { parseParticleSystem, sampleParticles } from './particles';
+
+const PARTICLE_CAP = 120; // per system
+const UNLIT_NAME = /unlit|vfx|sky|blit|ray|flare|glow|lattice|rainbow|grid|wisp|star|arrow|fog|text/i;
 
 /**
  * Unity is left-handed (+Z forward); Three.js is right-handed (-Z forward).
@@ -152,14 +157,23 @@ export class ThreeConverter {
    */
   private buildMaterial(parsed: ParsedMaterial, shader: ShaderInfo | null): THREE.Material {
     const blend = resolveBlend(shader, parsed.floats);
-    const color = new THREE.Color(parsed.color[0], parsed.color[1], parsed.color[2]);
+    const color = unityColor(parsed.color);
     const alphaF = parsed.floats['_Alpha'] ?? parsed.floats['_Opacity'];
     const brightness = parsed.floats['_Brightness'] ?? parsed.floats['_Intensity'];
     const side = blend.cull === 0 ? THREE.DoubleSide : blend.cull === 1 ? THREE.BackSide : THREE.FrontSide;
 
+    // Unlit detection: fixed-function lighting off, VFX-ish shader names, or
+    // HDR colors (glow). These render full-bright instead of going black.
+    const hdr = parsed.color[0] > 1.2 || parsed.color[1] > 1.2 || parsed.color[2] > 1.2;
+    const isUnlit =
+      shader?.lighting === false ||
+      UNLIT_NAME.test(parsed.shaderName) ||
+      hdr ||
+      blend.mode === 'additive' ||
+      blend.mode === 'multiply';
+
     let mat: THREE.Material;
     if (blend.mode === 'additive' || blend.mode === 'multiply') {
-      // glow/VFX shaders: unlit, blended
       const basic = new THREE.MeshBasicMaterial({
         color,
         side,
@@ -173,7 +187,6 @@ export class ThreeConverter {
       }
       mat = basic;
     } else if (blend.mode === 'alpha') {
-      const isUnlit = /unlit|vfx|sky|blit|text/i.test(parsed.shaderName);
       if (isUnlit) {
         mat = new THREE.MeshBasicMaterial({
           color,
@@ -193,6 +206,9 @@ export class ThreeConverter {
           metalness: parsed.floats['_Metallic'] ?? 0,
         });
       }
+    } else if (isUnlit) {
+      // opaque custom shader that doesn't use scene lighting
+      mat = new THREE.MeshBasicMaterial({ color, side });
     } else {
       // opaque: standard lit fallback ("normal shader")
       const std = new THREE.MeshStandardMaterial({
@@ -203,8 +219,11 @@ export class ThreeConverter {
       });
       const emissive = parsed.colors['_EmissionColor'];
       if (emissive && (emissive[0] > 0.01 || emissive[1] > 0.01 || emissive[2] > 0.01)) {
-        std.emissive = new THREE.Color(emissive[0], emissive[1], emissive[2]);
+        std.emissive = unityColor(emissive);
         std.emissiveIntensity = 0.6;
+      } else if (parsed.shaderName && !/standard|universal|lit/i.test(parsed.shaderName)) {
+        // unknown custom shader: keep it lit, but never pitch black
+        std.emissive = color.clone().multiplyScalar(0.22);
       }
       mat = std;
     }
@@ -246,7 +265,7 @@ export class ThreeConverter {
     return this.prefab(entry.pathID);
   }
 
-  private buildObject(node: UGameObject): THREE.Object3D {
+  private buildObject(node: UGameObject, path = ''): THREE.Object3D {
     let obj: THREE.Object3D;
     if (node.meshPathID) {
       const geo = this.geometry(node.meshPathID);
@@ -268,13 +287,77 @@ export class ThreeConverter {
     obj.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
     obj.visible = node.active;
     obj.userData.unityPathID = node.pathID;
-    if (node.componentClasses.includes(ClassID.ParticleSystem)) {
-      obj.userData.hasParticles = true;
+    obj.userData.uPath = path;
+
+    // Unity AnimationClip playback (Animator -> controller -> first clip)
+    if (node.animatorControllerPathID) {
+      const clip = clipForController(this.db, node.animatorControllerPathID);
+      if (clip) obj.userData.animClip = clip;
     }
+
+    // particle system approximation
+    if (node.particleSystemPathID) {
+      const points = this.buildParticles(node);
+      if (points) obj.add(points);
+    }
+
     for (const child of node.children) {
-      obj.add(this.buildObject(child));
+      const childPath = path ? `${path}/${child.name}` : child.name;
+      obj.add(this.buildObject(child, childPath));
     }
     return obj;
+  }
+
+  private buildParticles(node: UGameObject): THREE.Points | null {
+    try {
+      const params = parseParticleSystem(this.db, node.particleSystemPathID!);
+      if (!params || params.rate <= 0) return null;
+      const cap = Math.min(Math.floor(Math.min(params.rate * params.lifetime, params.maxParticles)), PARTICLE_CAP);
+      if (cap <= 0) return null;
+
+      const positions = new Float32Array(cap * 3);
+      const alphas = new Float32Array(cap);
+      sampleParticles(params, 0, positions, alphas, cap);
+      // unity -> three: flip z
+      for (let i = 2; i < positions.length; i += 3) positions[i] = -positions[i];
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Math.max(params.shapeRadius + params.speed * params.lifetime, 1) * 2);
+
+      // material from the ParticleSystemRenderer
+      let map: THREE.Texture | null = null;
+      let blending: THREE.Blending = THREE.AdditiveBlending;
+      let color = unityColor(params.startColor);
+      if (node.particleMaterialPathIDs.length) {
+        const info = this.materialInfo(node.particleMaterialPathIDs[0]);
+        if (info) {
+          if (info.parsed.mainTexPathID) map = this.texture(info.parsed.mainTexPathID);
+          const blend = resolveBlend(info.shader, info.parsed.floats);
+          blending = blend.mode === 'additive' ? THREE.AdditiveBlending : THREE.NormalBlending;
+          color = color.multiply(unityColor(info.parsed.color));
+        }
+      }
+      const mat = new THREE.PointsMaterial({
+        size: Math.min(params.size, 4),
+        sizeAttenuation: true,
+        map: map ?? undefined,
+        color,
+        transparent: true,
+        opacity: clamp01(params.startColor[3]) * 0.9,
+        depthWrite: false,
+        blending,
+      });
+      const points = new THREE.Points(geo, mat);
+      points.name = 'particles';
+      points.userData.particle = params;
+      points.userData.particleCap = cap;
+      points.frustumCulled = false;
+      return points;
+    } catch (e) {
+      console.warn('particle conversion failed', e);
+      return null;
+    }
   }
 }
 
@@ -284,6 +367,21 @@ function defaultMaterial(): THREE.MeshStandardMaterial {
 
 function clamp01(v: number): number {
   return Math.min(Math.max(v, 0), 1);
+}
+
+/**
+ * Unity colors are authored in sRGB; convert into three's linear working
+ * space. HDR colors (>1) keep their intensity scale.
+ */
+export function unityColor(c: [number, number, number, number] | number[]): THREE.Color {
+  const r = c[0] ?? 1;
+  const g = c[1] ?? 1;
+  const b = c[2] ?? 1;
+  const max = Math.max(r, g, b, 1);
+  const col = new THREE.Color();
+  col.setRGB(clamp01(r / max), clamp01(g / max), clamp01(b / max), THREE.SRGBColorSpace);
+  if (max > 1) col.multiplyScalar(Math.min(max, 4));
+  return col;
 }
 
 /** Clone that shares geometries/materials (instances stay cheap). */

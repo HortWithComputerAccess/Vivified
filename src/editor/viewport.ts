@@ -3,6 +3,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { ThreeConverter, unityEulerToQuaternion } from '../unity/toThree';
 import { TrackEngine, PrefabInstance } from '../anim/tracks';
+import { ParsedClip, sampleVec, sampleQuat } from '../unity/animationClip';
+import { sampleParticles, ParticleParams } from '../unity/particles';
+
+interface BoundClip {
+  clip: ParsedClip;
+  targets: { obj: THREE.Object3D; binding: ParsedClip['bindings'][number] }[];
+}
 
 export type GizmoMode = 'translate' | 'rotate' | 'scale';
 
@@ -65,6 +72,8 @@ export class Viewport {
     this.resize();
   }
 
+  lights!: { hemi: THREE.HemisphereLight; dir: THREE.DirectionalLight; dir2: THREE.DirectionalLight };
+
   private buildEnvironment(): void {
     const hemi = new THREE.HemisphereLight(0xbfc4ff, 0x202028, 0.9);
     this.scene.add(hemi);
@@ -74,6 +83,7 @@ export class Viewport {
     const dir2 = new THREE.DirectionalLight(0x8888ff, 0.5);
     dir2.position.set(-8, 6, -10);
     this.scene.add(dir2);
+    this.lights = { hemi, dir, dir2 };
 
     // floor grid (1m cells)
     const grid = new THREE.GridHelper(60, 60, 0x3a3a48, 0x26262f);
@@ -123,10 +133,75 @@ export class Viewport {
   /** Preview a prefab at origin without creating an event. */
   showPreview(assetPath: string | null): void {
     this.previewGroup.clear();
-    if (!assetPath || !this.converter) return;
-    const obj = this.converter.prefabByPath(assetPath);
-    if (obj) {
-      this.previewGroup.add(obj);
+    if (assetPath && this.converter) {
+      const obj = this.converter.prefabByPath(assetPath);
+      if (obj) this.previewGroup.add(obj);
+    }
+    this.collectAnimated();
+  }
+
+  // --- unity clip + particle playback ---------------------------------------
+  private boundClips: BoundClip[] = [];
+  private particleTargets: THREE.Points[] = [];
+
+  /** Gather AnimationClip roots and particle systems after scene changes. */
+  private collectAnimated(): void {
+    this.boundClips = [];
+    this.particleTargets = [];
+    const scan = (container: THREE.Object3D) => {
+      container.traverse((o) => {
+        const clip = o.userData.animClip as ParsedClip | undefined;
+        if (clip) {
+          const targets: BoundClip['targets'] = [];
+          for (const binding of clip.bindings) {
+            const target = binding.path === '' ? o : findByPath(o, binding.path);
+            if (target) targets.push({ obj: target, binding });
+          }
+          if (targets.length) this.boundClips.push({ clip, targets });
+        }
+        if ((o as THREE.Points).isPoints && o.userData.particle) {
+          this.particleTargets.push(o as THREE.Points);
+        }
+      });
+    };
+    scan(this.instancesGroup);
+    scan(this.previewGroup);
+  }
+
+  private applyClips(timeSeconds: number): void {
+    for (const { clip, targets } of this.boundClips) {
+      const t = clip.loop || clip.length <= 0 ? ((timeSeconds % clip.length) + clip.length) % clip.length : Math.min(timeSeconds, clip.length);
+      for (const { obj, binding } of targets) {
+        if (binding.position) {
+          const v = sampleVec(binding.position, t);
+          obj.position.set(v[0], v[1], -v[2]);
+        }
+        if (binding.rotation) {
+          const q = sampleQuat(binding.rotation, t);
+          obj.quaternion.set(-q[0], -q[1], q[2], q[3]);
+        } else if (binding.euler) {
+          const e = sampleVec(binding.euler, t);
+          obj.quaternion.copy(unityEulerToQuaternion(e[0], e[1], e[2]));
+        }
+        if (binding.scale) {
+          const s = sampleVec(binding.scale, t);
+          obj.scale.set(s[0], s[1], s[2]);
+        }
+      }
+    }
+  }
+
+  private applyParticles(timeSeconds: number): void {
+    for (const points of this.particleTargets) {
+      const params = points.userData.particle as ParticleParams;
+      const cap = points.userData.particleCap as number;
+      const attr = points.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const alphas = (points.userData.alphaScratch as Float32Array) ?? new Float32Array(cap);
+      points.userData.alphaScratch = alphas;
+      sampleParticles(params, timeSeconds, attr.array as Float32Array, alphas, cap);
+      const arr = attr.array as Float32Array;
+      for (let i = 2; i < arr.length; i += 3) arr[i] = -arr[i];
+      attr.needsUpdate = true;
     }
   }
 
@@ -134,7 +209,9 @@ export class Viewport {
   private lastInstanceKey = '';
 
   /** Sync scene objects with engine state at the given beat. */
-  update(engine: TrackEngine | null, beat: number): void {
+  update(engine: TrackEngine | null, beat: number, timeSeconds = 0): void {
+    this.applyClips(timeSeconds);
+    this.applyParticles(timeSeconds);
     if (!engine) {
       if (this.instanceNodes.length) {
         this.instancesGroup.clear();
@@ -192,6 +269,7 @@ export class Viewport {
         this.gizmo.attach(root);
       }
     }
+    this.collectAnimated();
   }
 
   private applyTransform(node: InstanceNode, engine: TrackEngine, beat: number): void {
@@ -414,4 +492,14 @@ function makeMissingPlaceholder(asset: string): THREE.Object3D {
 
 function round3(v: number): number {
   return Math.round(v * 1000) / 1000;
+}
+
+/** Resolve a unity transform path ("A/B/C") below a root object. */
+function findByPath(root: THREE.Object3D, path: string): THREE.Object3D | null {
+  let cur: THREE.Object3D | null = root;
+  for (const part of path.split('/')) {
+    if (!cur) return null;
+    cur = cur.children.find((c) => c.name === part) ?? null;
+  }
+  return cur;
 }

@@ -19,6 +19,8 @@ export interface ShaderInfo {
   zWriteProp: string | null;
   cull: number | null; // 0 off, 1 front, 2 back
   cullProp: string | null;
+  /** fixed-function Lighting state; false strongly implies an unlit shader */
+  lighting: boolean | null;
   /** declared properties: name -> type (0 color, 1 vector, 2 float, 3 range, 4 texture) */
   props: { name: string; type: number }[];
 }
@@ -100,6 +102,7 @@ function parseShaderUncached(db: AssetDB, shaderPathID: number): ShaderInfo | nu
     zWriteProp: zw.prop,
     cull: cull.num,
     cullProp: cull.prop,
+    lighting: state?.lighting === undefined ? null : !!state.lighting,
     props,
   };
 }
