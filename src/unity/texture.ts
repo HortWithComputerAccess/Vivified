@@ -21,8 +21,43 @@ export const TexFormat = {
   BGRA32: 14,
   DXT1: 10,
   DXT5: 12,
+  BC6H: 24,
   BC7: 25,
+  BC4: 26,
+  BC5: 27,
 } as const;
+
+export interface RawTexture {
+  name: string;
+  width: number;
+  height: number;
+  format: number;
+  data: Uint8Array;
+}
+
+/** Raw (still compressed) top-level texture data, for GPU upload paths. */
+export function rawTexture(db: AssetDB, texPathID: number): RawTexture | null {
+  const tex = db.read(texPathID) as any;
+  if (!tex) return null;
+  const width = Number(tex.m_Width ?? 0);
+  const height = Number(tex.m_Height ?? 0);
+  if (!width || !height) return null;
+  let data: Uint8Array =
+    tex['image data'] instanceof Uint8Array ? tex['image data'] : new Uint8Array(0);
+  if (data.length === 0 && tex.m_StreamData?.path) {
+    const sd = tex.m_StreamData;
+    const streamed = db.resourceData(String(sd.path), Number(sd.offset), Number(sd.size));
+    if (streamed) data = streamed;
+  }
+  if (data.length === 0) return null;
+  return {
+    name: String(tex.m_Name ?? 'Texture'),
+    width,
+    height,
+    format: Number(tex.m_TextureFormat ?? 0),
+    data,
+  };
+}
 
 export function decodeTexture(db: AssetDB, texPathID: number): DecodedTexture | null {
   const tex = db.read(texPathID) as any;
@@ -107,6 +142,12 @@ export function decodeTexture(db: AssetDB, texPathID: number): DecodedTexture | 
         break;
       case TexFormat.BC7:
         decodeBC7(data, width, height, rgba);
+        break;
+      case TexFormat.BC4:
+        decodeBC45(data, width, height, rgba, 1);
+        break;
+      case TexFormat.BC5:
+        decodeBC45(data, width, height, rgba, 2);
         break;
       default:
         console.warn(`Texture "${name}": unsupported format ${format}, using checker placeholder`);
@@ -208,6 +249,55 @@ function decodeDXT(data: Uint8Array, width: number, height: number, out: Uint8Ar
             out[o + 3] = alphas[ai];
           } else {
             out[o + 3] = colors[ci * 4 + 3];
+          }
+        }
+      }
+    }
+  }
+}
+
+/** BC4 (1 channel) / BC5 (2 channels): per-channel DXT5-style alpha blocks. */
+function decodeBC45(data: Uint8Array, width: number, height: number, out: Uint8Array, channels: 1 | 2): void {
+  const bw = Math.max(1, (width + 3) >> 2);
+  const bh = Math.max(1, (height + 3) >> 2);
+  const blockSize = channels * 8;
+  const vals = new Uint8Array(8);
+  for (let by = 0; by < bh; by++) {
+    for (let bx = 0; bx < bw; bx++) {
+      for (let ch = 0; ch < channels; ch++) {
+        const off = (by * bw + bx) * blockSize + ch * 8;
+        const a0 = data[off];
+        const a1 = data[off + 1];
+        vals[0] = a0;
+        vals[1] = a1;
+        if (a0 > a1) {
+          for (let i = 1; i < 7; i++) vals[i + 1] = ((7 - i) * a0 + i * a1) / 7;
+        } else {
+          for (let i = 1; i < 5; i++) vals[i + 1] = ((5 - i) * a0 + i * a1) / 5;
+          vals[6] = 0;
+          vals[7] = 255;
+        }
+        const bits0 = data[off + 2] | (data[off + 3] << 8) | (data[off + 4] << 16);
+        const bits1 = data[off + 5] | (data[off + 6] << 8) | (data[off + 7] << 16);
+        for (let py = 0; py < 4; py++) {
+          const y = by * 4 + py;
+          if (y >= height) break;
+          for (let px = 0; px < 4; px++) {
+            const x = bx * 4 + px;
+            if (x >= width) continue;
+            const li = py * 4 + px;
+            const idx = li < 8 ? (bits0 >> (li * 3)) & 7 : (bits1 >> ((li - 8) * 3)) & 7;
+            const v = vals[idx];
+            const o = (y * width + x) * 4;
+            if (ch === 0) {
+              // BC4: replicate to RGB (grayscale); BC5: red channel
+              out[o] = v;
+              out[o + 1] = channels === 1 ? v : 0;
+              out[o + 2] = channels === 1 ? v : 0;
+              out[o + 3] = 255;
+            } else {
+              out[o + 1] = v; // BC5 green
+            }
           }
         }
       }

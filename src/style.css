@@ -119,3 +119,15 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); }
 #timeline { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
 
 .gizmo-modes { display: flex; gap: 2px; }
+
+#btn-autokey.active { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+.mat-meta { color: var(--fg-dim); line-height: 1.5; }
+.mat-meta b { color: var(--fg); }
+.tex-preview {
+  max-width: 100%; image-rendering: pixelated;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: repeating-conic-gradient(#222 0% 25%, #2c2c36 0% 50%) 0 0 / 16px 16px;
+}
+.asset-row.clickable .name { cursor: pointer; }
+.asset-row.clickable .name:hover { color: var(--accent2); }

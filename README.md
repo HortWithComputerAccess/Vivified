@@ -32,10 +32,23 @@ Use **Chrome or Edge** — saving in place uses the File System Access API
 | Add / delete / duplicate | **+ Add** button, inspector **Delete**/**Duplicate**, or **Del** key. |
 | Focus selection | **F** frames the selected object (environments can be huge). |
 | Undo / redo / save | **Ctrl+Z / Ctrl+Y / Ctrl+S** (writes the difficulty `.dat` in place). |
+| **Animate visually** | Toggle **●Key** (auto-key): every gizmo edit writes an `AnimateTrack` keyframe at the current beat. Or press **K**/**+Key** to key the current pose. Keys appear as diamonds on the timeline; the event window and normalized keyframe times are managed for you. |
+| Edit materials | Click a material in the Assets tab: shows the shader, how it was recreated (additive/alpha/opaque), and live-editable colors/floats. **+ SetMaterialProperty @ beat** turns your edits into an event. |
+| Inspect textures | Click a texture in the Assets tab for a full preview (DXT1/5, BC4/5, BC7 and uncompressed formats decode in-browser). |
+| Notes preview | **Notes** toggles notes flying at the player with correct jump math, skinned by `AssignObjectPrefab` prefabs from the bundle. |
+| Player POV | **POV** switches to the player's first-person view, following `AssignPlayerToTrack` animation. |
 
 The viewport evaluates the Heck animation engine over time: `AnimateTrack`
 (position/rotation/scale/dissolve with point definitions, easings, splines, repeat),
-`InstantiatePrefab`/`DestroyObject` lifetimes, and `AssignTrackParent` chains.
+`InstantiatePrefab`/`DestroyObject` lifetimes, `AssignTrackParent` chains, and
+`SetMaterialProperty` color/float animations applied live to the converted materials.
+
+**Shader recreation:** the editor parses each shader's serialized render state
+(blend factors — including material-property-driven ones — culling, depth write,
+render queue) and rebuilds the equivalent Three.js material: additive glow,
+alpha blending, multiply, or a standard lit fallback when the state is opaque
+or unavailable. Compiled HLSL can't run in the browser, so custom vertex
+animation and post-processing still need the game for an exact look.
 
 ## What it can't do (yet)
 

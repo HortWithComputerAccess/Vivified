@@ -78,5 +78,33 @@ for (const t of names) {
 }
 console.log('  parent chains ok');
 
+// --- keyframe authoring round trip -----------------------------------------
+const { writeTransformKeys, listKeys } = await import('../src/editor/keyframes');
+const { TrackEngine: TE } = await import('../src/anim/tracks');
+
+const testEvents: any[] = [
+  { b: 0, t: 'InstantiatePrefab', d: { asset: 'a.prefab', id: 'x', track: 'kf_test' } },
+];
+writeTransformKeys(testEvents, 'kf_test', 4, { position: [0, 0, 0] });
+writeTransformKeys(testEvents, 'kf_test', 8, { position: [0, 5, 0] });
+writeTransformKeys(testEvents, 'kf_test', 6, { position: [0, 2, 0], rotation: [0, 90, 0] });
+const animEvents = testEvents.filter((e) => e.t === 'AnimateTrack');
+check(animEvents.length === 1, `keyframes merged into one AnimateTrack (got ${animEvents.length})`);
+const kf = animEvents[0];
+check(kf.b === 4 && kf.d.duration === 4, `key window 4..8 (got b=${kf.b} dur=${kf.d.duration})`);
+const keys = listKeys(testEvents, 'kf_test');
+check(keys.length === 4, `4 keys listed (3 pos + 1 rot) (got ${keys.length})`);
+
+// engine evaluates the authored animation
+const eng2 = new TE();
+eng2.rebuild(testEvents as any);
+const mid = eng2.evaluate('kf_test', 6);
+check(
+  !!mid.position && Math.abs(mid.position[1] - 2) < 1e-6,
+  `authored key at beat 6 evaluates to y=2 (got ${mid.position?.[1]})`
+);
+const end = eng2.evaluate('kf_test', 10);
+check(!!end.position && Math.abs(end.position[1] - 5) < 1e-6, `holds y=5 after window (got ${end.position?.[1]})`);
+
 console.log(failures ? `\n${failures} FAILURES` : '\nALL OK');
 process.exit(failures ? 1 : 0);

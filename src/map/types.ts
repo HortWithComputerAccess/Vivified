@@ -26,6 +26,10 @@ export interface DifficultyRef {
   difficulty: string;
   filename: string;
   requirements: string[];
+  njs: number;
+  startBeatOffset: number;
+  colorLeft: { r: number; g: number; b: number } | null;
+  colorRight: { r: number; g: number; b: number } | null;
 }
 
 export interface InfoDat {

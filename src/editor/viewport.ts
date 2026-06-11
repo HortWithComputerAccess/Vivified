@@ -289,21 +289,68 @@ export class Viewport {
     this.onSelectInstance(node.instance);
   }
 
-  private emitGizmo(): void {
+  /** Selected object's pose in unity space (position, euler deg, scale). */
+  getSelectedPoseUnity(): {
+    position: [number, number, number];
+    rotation: [number, number, number];
+    scale: [number, number, number];
+  } | null {
     const node = this.selectedNode;
-    if (!node) return;
+    if (!node) return null;
     const p = node.root.position;
     const q = node.root.quaternion;
     const s = node.root.scale;
     // three -> unity: pos (x,y,-z); quaternion (-x,-y,z,w); euler from unity quat
     const uq = new THREE.Quaternion(-q.x, -q.y, q.z, q.w);
     const eul = unityQuatToEuler(uq);
-    this.onGizmoChange(
-      node.instance,
-      [round3(p.x), round3(p.y), round3(-p.z)],
-      [round3(eul[0]), round3(eul[1]), round3(eul[2])],
-      [round3(s.x), round3(s.y), round3(s.z)]
-    );
+    return {
+      position: [round3(p.x), round3(p.y), round3(-p.z)],
+      rotation: [round3(eul[0]), round3(eul[1]), round3(eul[2])],
+      scale: [round3(s.x), round3(s.y), round3(s.z)],
+    };
+  }
+
+  private emitGizmo(): void {
+    const node = this.selectedNode;
+    const pose = this.getSelectedPoseUnity();
+    if (!node || !pose) return;
+    this.onGizmoChange(node.instance, pose.position, pose.rotation, pose.scale);
+  }
+
+  // --- player POV mode ---
+  povMode = false;
+  private savedCamPos: THREE.Vector3 | null = null;
+  private savedCamTarget: THREE.Vector3 | null = null;
+
+  setPov(on: boolean): void {
+    if (on === this.povMode) return;
+    this.povMode = on;
+    if (on) {
+      this.savedCamPos = this.camera.position.clone();
+      this.savedCamTarget = this.controls.target.clone();
+      this.controls.enabled = false;
+      this.gizmo.detach();
+    } else {
+      this.controls.enabled = true;
+      if (this.savedCamPos && this.savedCamTarget) {
+        this.camera.position.copy(this.savedCamPos);
+        this.controls.target.copy(this.savedCamTarget);
+      }
+    }
+  }
+
+  /** Per-frame POV pose from player track animation (unity space). */
+  applyPovPose(pos: [number, number, number] | null, rotEulerDeg: [number, number, number] | null): void {
+    if (!this.povMode) return;
+    const base = new THREE.Vector3(0, 1.7, 0);
+    if (pos) base.add(new THREE.Vector3(pos[0], pos[1], -pos[2]));
+    this.camera.position.copy(base);
+    const q = rotEulerDeg
+      ? unityEulerToQuaternion(rotEulerDeg[0], rotEulerDeg[1], rotEulerDeg[2])
+      : new THREE.Quaternion();
+    // look along unity forward (+Z -> three -Z)
+    const look = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0));
+    this.camera.quaternion.copy(q).multiply(look);
   }
 
   resize(): void {
@@ -317,7 +364,7 @@ export class Viewport {
   }
 
   render(): void {
-    this.controls.update();
+    if (!this.povMode) this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
 }

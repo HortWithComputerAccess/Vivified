@@ -19,6 +19,9 @@ import { Viewport, GizmoMode } from './editor/viewport';
 import { Timeline } from './editor/timeline';
 import { EventListPanel, Inspector, AssetBrowser, makeEventFromTemplate } from './editor/panels';
 import { SongPlayer } from './editor/audio';
+import { NotesPreview } from './editor/notes';
+import { MaterialAnimator } from './anim/materialAnim';
+import { writeTransformKeys, listKeys } from './editor/keyframes';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -40,6 +43,12 @@ const eventList = new EventListPanel($('#event-list'), $('#event-filter') as HTM
 const inspector = new Inspector($('#inspector'));
 const assetBrowser = new AssetBrowser($('#asset-browser'));
 const player = new SongPlayer();
+const notes = new NotesPreview();
+const matAnim = new MaterialAnimator();
+viewport.scene.add(notes.group);
+
+let converter: ThreeConverter | null = null;
+let autoKey = false;
 
 const statusEl = $('#status');
 const beatDisplay = $('#beat-display');
@@ -89,6 +98,9 @@ function afterEventsChanged(keepSelected: CustomEvent | null): void {
   const endBeat = player.loaded ? bpm.beatAt(player.duration) : 64;
   timeline.setEvents(events(), endBeat);
   eventList.setEvents(events());
+  notes.rebuildSkins(events());
+  matAnim.rebuild(events(), diff.data.customData?.pointDefinitions ?? {});
+  refreshKeyDiamonds();
   if (keepSelected && events().includes(keepSelected)) {
     selectEvent(keepSelected, false);
   } else if (keepSelected === null) {
@@ -113,7 +125,23 @@ function selectEvent(ev: CustomEvent | null, scroll = true): void {
   } else {
     viewport.selectInstanceById(null);
   }
+  refreshKeyDiamonds();
   if (scroll) eventList.scrollToSelected();
+}
+
+/** Show keyframe diamonds for the selected object's track on the timeline. */
+function refreshKeyDiamonds(): void {
+  const ev = inspector.event;
+  let track: string | null = null;
+  if (ev?.t === 'InstantiatePrefab') {
+    const t = ev.d?.track;
+    track = typeof t === 'string' ? t : Array.isArray(t) ? t[0] : null;
+  } else if (ev?.t === 'AnimateTrack') {
+    const t = ev.d?.track;
+    track = typeof t === 'string' ? t : Array.isArray(t) ? t[0] : null;
+  }
+  timeline.keyBeats = track ? listKeys(events(), track).map((k) => k.beat) : [];
+  timeline.draw();
 }
 
 function setBeat(b: number, fromTimeline = false): void {
@@ -197,6 +225,11 @@ async function doLoadDifficulty(index: number): Promise<void> {
     if (diff.data.bpmEvents?.length) {
       bpm = new BpmMap(map.info._beatsPerMinute ?? 120, diff.data.bpmEvents);
     }
+    notes.configure(ref.njs, ref.startBeatOffset, map.info._beatsPerMinute ?? 120, {
+      left: ref.colorLeft,
+      right: ref.colorRight,
+    });
+    notes.rebuild(diff.data);
     undoStack.length = 0;
     redoStack.length = 0;
     dirty = false;
@@ -216,8 +249,9 @@ async function doLoadBundle(file: File): Promise<void> {
     const buf = await file.arrayBuffer();
     await new Promise((r) => setTimeout(r)); // let status paint
     db = AssetDB.fromBundle(buf);
-    const converter = new ThreeConverter(db);
+    converter = new ThreeConverter(db);
     viewport.setConverter(converter);
+    notes.setConverter(converter);
     assetBrowser.setDb(db);
     status(`${file.name}: ${db.containers.length} assets, ${db.objects.size} objects (unity ${db.unityRevision})`);
     updateHud();
@@ -284,14 +318,62 @@ viewport.onSelectInstance = (inst) => {
 };
 viewport.onGizmoChange = (inst, pos, rot, scale) => {
   commit();
-  const d = (inst.event.d = inst.event.d ?? {});
-  d.position = pos;
-  d.rotation = rot;
-  d.scale = scale;
-  afterEventsChanged(inst.event);
-  inspector.refreshData();
-  status(`moved ${inst.id} → [${pos.join(', ')}]`);
+  const track = inst.tracks[0];
+  if (autoKey && track) {
+    // visual keyframe authoring: write the pose into AnimateTrack keyframes
+    const touched = writeTransformKeys(events(), track, beat, {
+      position: pos,
+      rotation: rot,
+      scale,
+    });
+    afterEventsChanged(inst.event);
+    inspector.refreshData();
+    status(`keyed ${track} @ ${beat.toFixed(2)} (${touched.length} AnimateTrack event${touched.length === 1 ? '' : 's'})`);
+  } else {
+    const d = (inst.event.d = inst.event.d ?? {});
+    d.position = pos;
+    d.rotation = rot;
+    d.scale = scale;
+    afterEventsChanged(inst.event);
+    inspector.refreshData();
+    status(`moved ${inst.id} → [${pos.join(', ')}]${track ? '' : ' (no track — enable a track to keyframe)'}`);
+  }
 };
+
+/** Write a keyframe for the selected object at the current beat (K / +Key). */
+function addKeyNow(): void {
+  const ev = inspector.event;
+  if (!diff || !ev || ev.t !== 'InstantiatePrefab' || !engine) {
+    status('select a spawned object first');
+    return;
+  }
+  const inst = engine.instances.find((i) => i.event === ev);
+  const track = inst?.tracks[0];
+  if (!inst || !track) {
+    status('object has no track — add a "track" to its InstantiatePrefab event first');
+    return;
+  }
+  // prefer the live gizmo pose; fall back to the engine-evaluated pose so
+  // keying works straight from the event list too
+  let pose = viewport.getSelectedPoseUnity();
+  if (!pose) {
+    const st = engine.evaluate(track, beat);
+    pose = {
+      position: (st.localPosition ?? st.position ?? inst.spawnPosition) as [number, number, number],
+      rotation: (st.localRotation ?? st.rotation ?? inst.spawnRotation) as [number, number, number],
+      scale: (st.scale ?? inst.spawnScale) as [number, number, number],
+    };
+  }
+  commit();
+  writeTransformKeys(events(), track, beat, {
+    position: pose.position,
+    rotation: pose.rotation,
+    scale: pose.scale,
+  });
+  afterEventsChanged(ev);
+  inspector.refreshData();
+  status(`keyed ${track} @ ${beat.toFixed(2)}`);
+}
 
 assetBrowser.onSpawn = (assetPath) => {
   if (!diff) {
@@ -312,6 +394,28 @@ assetBrowser.onSpawn = (assetPath) => {
   status(`spawned ${ev.d.id} at beat ${beat.toFixed(2)}`);
 };
 assetBrowser.onPreview = (assetPath) => viewport.showPreview(assetPath);
+assetBrowser.onInspectMaterial = (assetPath) => {
+  if (converter) inspector.showMaterial(assetPath, converter);
+};
+assetBrowser.onInspectTexture = (assetPath, pathID) => {
+  if (db) inspector.showTexture(assetPath, db, pathID);
+};
+inspector.onCreateMaterialEvent = (assetPath, props) => {
+  if (!diff) {
+    status('open a map first');
+    return;
+  }
+  commit();
+  const ev: CustomEvent = {
+    b: beat,
+    t: 'SetMaterialProperty',
+    d: { asset: assetPath, duration: 0, properties: props },
+  };
+  events().push(ev);
+  afterEventsChanged(ev);
+  selectEvent(ev);
+  status(`SetMaterialProperty (${props.map((p) => p.id).join(', ')}) @ ${beat.toFixed(2)}`);
+};
 
 // --- toolbar -----------------------------------------------------------------
 $('#btn-open-map').addEventListener('click', doOpenMap);
@@ -354,6 +458,21 @@ for (const mode of ['translate', 'rotate', 'scale'] as GizmoMode[]) {
     btn.classList.add('active');
   });
 }
+
+$('#btn-autokey').addEventListener('click', () => {
+  autoKey = !autoKey;
+  $('#btn-autokey').classList.toggle('active', autoKey);
+  status(autoKey ? 'auto-key ON: gizmo edits write AnimateTrack keyframes' : 'auto-key off');
+});
+$('#btn-addkey').addEventListener('click', addKeyNow);
+$('#btn-notes').addEventListener('click', () => {
+  notes.enabled = !notes.enabled;
+  $('#btn-notes').classList.toggle('active', notes.enabled);
+});
+$('#btn-pov').addEventListener('click', () => {
+  viewport.setPov(!viewport.povMode);
+  $('#btn-pov').classList.toggle('active', viewport.povMode);
+});
 
 // add-event popup
 $('#btn-add-event').addEventListener('click', (e) => {
@@ -445,6 +564,8 @@ window.addEventListener('keydown', (e) => {
     $('#gizmo-scale').click();
   } else if (e.code === 'KeyF') {
     viewport.focusSelected();
+  } else if (e.code === 'KeyK') {
+    addKeyNow();
   } else if (e.code === 'Delete') {
     const ev = inspector.event;
     if (ev) inspector.onDelete(ev);
@@ -472,6 +593,18 @@ function frame(): void {
     playBtn.textContent = '▶';
   }
   viewport.update(engine, beat);
+  notes.update(beat);
+  matAnim.apply(converter, beat);
+  if (viewport.povMode && engine) {
+    let pos: [number, number, number] | null = null;
+    let rot: [number, number, number] | null = null;
+    for (const t of engine.playerTracks) {
+      const st = engine.evaluate(t, beat);
+      pos = st.localPosition ?? st.position ?? pos;
+      rot = st.localRotation ?? st.rotation ?? rot;
+    }
+    viewport.applyPovPose(pos, rot);
+  }
   viewport.render();
 }
 frame();
@@ -524,7 +657,15 @@ status('ready — open a map folder (needs Info.dat) or a .vivify bundle');
     const inst = engine?.instances.find((i) => i.id === id);
     if (inst) selectEvent(inst.event);
   },
+  addKey: addKeyNow,
+  inspectMaterial(path: string): void {
+    if (converter) inspector.showMaterial(path, converter);
+  },
   getState() {
+    let visibleNotes = 0;
+    notes.group.traverse((o) => {
+      if (o.visible && (o as THREE.Mesh).isMesh) visibleNotes++;
+    });
     return {
       events: events().length,
       instances: engine?.instances.length ?? 0,
@@ -532,6 +673,9 @@ status('ready — open a map folder (needs Info.dat) or a .vivify bundle');
       assets: db?.containers.length ?? 0,
       beat,
       status: statusEl.textContent,
+      animatedMaterials: matAnim.assetCount,
+      visibleNotes,
+      keyBeats: timeline.keyBeats.slice(),
     };
   },
 };

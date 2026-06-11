@@ -3,9 +3,14 @@ import { AssetDB } from './assets';
 export interface ParsedMaterial {
   name: string;
   shaderName: string;
+  shaderPathID: number | null;
   color: [number, number, number, number];
+  /** name of the color property used as the primary color, if any */
+  colorProp: string | null;
   mainTexPathID: number | null;
   transparent: boolean;
+  renderQueue: number;
+  keywords: string;
   floats: Record<string, number>;
   colors: Record<string, [number, number, number, number]>;
 }
@@ -51,13 +56,29 @@ export function parseMaterial(db: AssetDB, matPathID: number): ParsedMaterial | 
     }
   }
 
-  const color = colors['_Color'] ?? colors['_BaseColor'] ?? colors['_TintColor'] ?? [1, 1, 1, 1];
+  const colorProp =
+    ['_Color', '_BaseColor', '_TintColor', '_FaceColor', '_EmissionColor'].find((k) => k in colors) ??
+    Object.keys(colors)[0] ??
+    null;
+  const color: [number, number, number, number] = colorProp ? colors[colorProp] : [1, 1, 1, 1];
   const queue = Number(mat.m_CustomRenderQueue ?? 0);
   const keywords = String(mat.m_ShaderKeywords ?? '');
   const transparent =
     queue >= 3000 || color[3] < 0.999 || /_ALPHABLEND|_ALPHAPREMULTIPLY|TRANSPARENT/i.test(keywords);
 
-  return { name, shaderName, color, mainTexPathID, transparent, floats, colors };
+  return {
+    name,
+    shaderName,
+    shaderPathID: mat.m_Shader?.m_PathID ?? null,
+    color,
+    colorProp,
+    mainTexPathID,
+    transparent,
+    renderQueue: queue,
+    keywords,
+    floats,
+    colors,
+  };
 }
 
 function entries(container: any): [string, unknown][] {

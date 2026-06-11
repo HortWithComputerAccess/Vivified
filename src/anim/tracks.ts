@@ -54,6 +54,8 @@ export class TrackEngine {
   private timelines = new Map<string, Map<TransformProp, PropTimelineEntry[]>>();
   /** child track -> parent track */
   parents = new Map<string, string>();
+  /** tracks assigned to the player via AssignPlayerToTrack */
+  playerTracks: string[] = [];
   pointDefinitions: Record<string, any[]> = {};
 
   static fromBeatmap(map: V3Beatmap): TrackEngine {
@@ -68,6 +70,7 @@ export class TrackEngine {
     this.instances = [];
     this.timelines.clear();
     this.parents.clear();
+    this.playerTracks = [];
 
     const sorted = [...events].sort((a, b) => (a.b ?? 0) - (b.b ?? 0));
     let autoId = 0;
@@ -130,6 +133,12 @@ export class TrackEngine {
           const parent = String(d.parentTrack ?? '');
           for (const child of asStringArray(d.childrenTracks)) {
             if (parent) this.parents.set(child, parent);
+          }
+          break;
+        }
+        case 'AssignPlayerToTrack': {
+          for (const t of asStringArray(d.track)) {
+            if (!this.playerTracks.includes(t)) this.playerTracks.push(t);
           }
           break;
         }

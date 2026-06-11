@@ -37,6 +37,8 @@ export class Timeline {
   beat = 0;
   selected: CustomEvent | null = null;
   snap = 0.25;
+  /** keyframe beats of the selected object's track, drawn as diamonds */
+  keyBeats: number[] = [];
 
   onScrub: (beat: number) => void = () => {};
   onSelect: (ev: CustomEvent | null) => void = () => {};
@@ -283,6 +285,22 @@ export class Timeline {
     }
     ctx.fillStyle = '#8a8a98';
     ctx.fillText('beats', 6, 14);
+
+    // keyframe diamonds for the selected track
+    if (this.keyBeats.length) {
+      ctx.fillStyle = '#ff5a8a';
+      for (const kb of this.keyBeats) {
+        const kx = this.beatToX(kb);
+        if (kx < LABEL_W || kx > w) continue;
+        ctx.beginPath();
+        ctx.moveTo(kx, HEADER_H - 9);
+        ctx.lineTo(kx + 4, HEADER_H - 5);
+        ctx.lineTo(kx, HEADER_H - 1);
+        ctx.lineTo(kx - 4, HEADER_H - 5);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
 
     // playhead
     const px = this.beatToX(this.beat);

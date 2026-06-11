@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { AssetDB, UGameObject, buildGameObjectTree, ClassID } from './assets';
 import { parseMesh } from './mesh';
-import { parseMaterial } from './material';
+import { parseMaterial, ParsedMaterial } from './material';
 import { decodeTexture } from './texture';
+import { parseShader, resolveBlend, ShaderInfo } from './shader';
 
 /**
  * Unity is left-handed (+Z forward); Three.js is right-handed (-Z forward).
@@ -35,8 +36,24 @@ export class ThreeConverter {
   private db: AssetDB;
   private meshCache = new Map<number, THREE.BufferGeometry | null>();
   private materialCache = new Map<number, THREE.Material>();
+  private materialInfoCache = new Map<number, { parsed: ParsedMaterial; shader: ShaderInfo | null } | null>();
   private textureCache = new Map<number, THREE.Texture | null>();
   private prefabCache = new Map<number, THREE.Object3D | null>();
+
+  /** Find the three material instance for an asset path (e.g. "...mat"). */
+  materialByPath(assetPath: string): { material: THREE.Material; parsed: ParsedMaterial; shader: ShaderInfo | null } | null {
+    const entry = this.db.containers.find((c) => c.path.toLowerCase() === assetPath.toLowerCase());
+    if (!entry || this.db.classOf(entry.pathID) !== ClassID.Material) return null;
+    const info = this.materialInfo(entry.pathID);
+    if (!info) return null;
+    return { material: this.material(entry.pathID), parsed: info.parsed, shader: info.shader };
+  }
+
+  texturePathIDByPath(assetPath: string): number | null {
+    const entry = this.db.containers.find((c) => c.path.toLowerCase() === assetPath.toLowerCase());
+    if (!entry || this.db.classOf(entry.pathID) !== ClassID.Texture2D) return null;
+    return entry.pathID;
+  }
 
   constructor(db: AssetDB) {
     this.db = db;
@@ -107,40 +124,105 @@ export class ThreeConverter {
     return tex;
   }
 
+  /** Parsed material + recreated shader info, cached (for panels/animation). */
+  materialInfo(matPathID: number): { parsed: ParsedMaterial; shader: ShaderInfo | null } | null {
+    const cached = this.materialInfoCache.get(matPathID);
+    if (cached !== undefined) return cached;
+    const parsed = parseMaterial(this.db, matPathID);
+    const info = parsed
+      ? { parsed, shader: parsed.shaderPathID ? parseShader(this.db, parsed.shaderPathID) : null }
+      : null;
+    this.materialInfoCache.set(matPathID, info);
+    return info;
+  }
+
   material(matPathID: number): THREE.Material {
     const cached = this.materialCache.get(matPathID);
     if (cached) return cached;
-    let result: THREE.Material;
-    const parsed = parseMaterial(this.db, matPathID);
-    if (!parsed) {
-      result = defaultMaterial();
-    } else {
-      const mat = new THREE.MeshStandardMaterial({
-        name: parsed.name,
-        color: new THREE.Color(parsed.color[0], parsed.color[1], parsed.color[2]),
-        roughness: 1 - (parsed.floats['_Smoothness'] ?? parsed.floats['_Glossiness'] ?? 0.5),
-        metalness: parsed.floats['_Metallic'] ?? 0,
-        side: THREE.DoubleSide,
-      });
-      if (parsed.mainTexPathID) {
-        const tex = this.texture(parsed.mainTexPathID);
-        if (tex) mat.map = tex;
-      }
-      if (parsed.transparent) {
-        mat.transparent = true;
-        mat.opacity = Math.max(parsed.color[3], 0.05);
-        mat.depthWrite = false;
-      }
-      // unlit-ish shaders: give them some emissive so they don't render black
-      if (/unlit|additive|particle|sprite/i.test(parsed.shaderName)) {
-        mat.emissive = new THREE.Color(parsed.color[0], parsed.color[1], parsed.color[2]);
-        mat.emissiveIntensity = 0.8;
-        if (mat.map) mat.emissiveMap = mat.map;
-      }
-      result = mat;
-    }
+    const info = this.materialInfo(matPathID);
+    const result = info ? this.buildMaterial(info.parsed, info.shader) : defaultMaterial();
     this.materialCache.set(matPathID, result);
     return result;
+  }
+
+  /**
+   * Recreate the shader's visual character from its serialized render state:
+   * blend mode, depth write, culling, render queue. Unknown/opaque shaders
+   * fall back to a standard lit material.
+   */
+  private buildMaterial(parsed: ParsedMaterial, shader: ShaderInfo | null): THREE.Material {
+    const blend = resolveBlend(shader, parsed.floats);
+    const color = new THREE.Color(parsed.color[0], parsed.color[1], parsed.color[2]);
+    const alphaF = parsed.floats['_Alpha'] ?? parsed.floats['_Opacity'];
+    const brightness = parsed.floats['_Brightness'] ?? parsed.floats['_Intensity'];
+    const side = blend.cull === 0 ? THREE.DoubleSide : blend.cull === 1 ? THREE.BackSide : THREE.FrontSide;
+
+    let mat: THREE.Material;
+    if (blend.mode === 'additive' || blend.mode === 'multiply') {
+      // glow/VFX shaders: unlit, blended
+      const basic = new THREE.MeshBasicMaterial({
+        color,
+        side,
+        transparent: true,
+        depthWrite: false,
+        blending: blend.mode === 'additive' ? THREE.AdditiveBlending : THREE.MultiplyBlending,
+        opacity: clamp01(parsed.color[3] * (alphaF ?? 1)),
+      });
+      if (brightness !== undefined && brightness > 0) {
+        basic.color.multiplyScalar(Math.min(brightness, 4));
+      }
+      mat = basic;
+    } else if (blend.mode === 'alpha') {
+      const isUnlit = /unlit|vfx|sky|blit|text/i.test(parsed.shaderName);
+      if (isUnlit) {
+        mat = new THREE.MeshBasicMaterial({
+          color,
+          side,
+          transparent: true,
+          depthWrite: blend.depthWrite,
+          opacity: clamp01(Math.max(parsed.color[3] * (alphaF ?? 1), 0.05)),
+        });
+      } else {
+        mat = new THREE.MeshStandardMaterial({
+          color,
+          side,
+          transparent: true,
+          depthWrite: blend.depthWrite,
+          opacity: clamp01(Math.max(parsed.color[3] * (alphaF ?? 1), 0.05)),
+          roughness: 1 - (parsed.floats['_Smoothness'] ?? parsed.floats['_Glossiness'] ?? 0.5),
+          metalness: parsed.floats['_Metallic'] ?? 0,
+        });
+      }
+    } else {
+      // opaque: standard lit fallback ("normal shader")
+      const std = new THREE.MeshStandardMaterial({
+        color,
+        side,
+        roughness: 1 - (parsed.floats['_Smoothness'] ?? parsed.floats['_Glossiness'] ?? 0.5),
+        metalness: parsed.floats['_Metallic'] ?? 0,
+      });
+      const emissive = parsed.colors['_EmissionColor'];
+      if (emissive && (emissive[0] > 0.01 || emissive[1] > 0.01 || emissive[2] > 0.01)) {
+        std.emissive = new THREE.Color(emissive[0], emissive[1], emissive[2]);
+        std.emissiveIntensity = 0.6;
+      }
+      mat = std;
+    }
+
+    mat.name = parsed.name;
+    if (parsed.mainTexPathID) {
+      const tex = this.texture(parsed.mainTexPathID);
+      if (tex) {
+        (mat as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial).map = tex;
+        if (blend.mode === 'alpha' && (mat as any).alphaTest === 0 && parsed.floats['_Cutoff']) {
+          (mat as any).alphaTest = clamp01(parsed.floats['_Cutoff']);
+        }
+      }
+    }
+    mat.userData.shaderName = parsed.shaderName;
+    mat.userData.blendMode = blend.mode;
+    mat.userData.baseColor = parsed.color.slice();
+    return mat;
   }
 
   /** Instantiate a prefab (by container pathID of its root GameObject). */
@@ -198,6 +280,10 @@ export class ThreeConverter {
 
 function defaultMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color: 0x9b6ad6, roughness: 0.7, side: THREE.DoubleSide });
+}
+
+function clamp01(v: number): number {
+  return Math.min(Math.max(v, 0), 1);
 }
 
 /** Clone that shares geometries/materials (instances stay cheap). */

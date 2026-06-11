@@ -80,6 +80,10 @@ async function buildLoadedMap(
         difficulty: d._difficulty ?? '?',
         filename: d._beatmapFilename,
         requirements: d._customData?._requirements ?? [],
+        njs: Number(d._noteJumpMovementSpeed ?? 10),
+        startBeatOffset: Number(d._noteJumpStartBeatOffset ?? 0),
+        colorLeft: d._customData?._colorLeft ?? null,
+        colorRight: d._customData?._colorRight ?? null,
       });
     }
   }

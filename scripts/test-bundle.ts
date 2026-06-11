@@ -110,6 +110,27 @@ for (const bundleName of ['bundleWindows2019.vivify', 'bundleWindows2021.vivify'
   console.log(`  materials parsed: ${matOk}`);
   check(matOk > 0, 'materials parsed');
 
+  // shaders: parsed forms + recreated blend state
+  {
+    const { parseShader, resolveBlend } = await import('../src/unity/shader');
+    const { ClassID: C } = await import('../src/unity/assets');
+    let parsed = 0;
+    let additive = 0;
+    let alpha = 0;
+    for (const [pathID, [, info]] of db.objects) {
+      if (info.classID !== C.Shader) continue;
+      const sh = parseShader(db, pathID);
+      if (!sh) continue;
+      parsed++;
+      const blend = resolveBlend(sh, {});
+      if (blend.mode === 'additive') additive++;
+      if (blend.mode === 'alpha') alpha++;
+    }
+    console.log(`  shaders parsed: ${parsed} (additive: ${additive}, alpha: ${alpha})`);
+    check(parsed >= 30, 'shader parsed forms read');
+    check(additive >= 2, 'additive shaders recreated');
+  }
+
   // textures: report formats, decode all
   const formats = new Map<number, number>();
   let texOk = 0;

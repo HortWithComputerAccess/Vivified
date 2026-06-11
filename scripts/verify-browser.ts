@@ -99,6 +99,38 @@ async function main(): Promise<void> {
   await page.waitForTimeout(300);
   await page.screenshot({ path: join(OUT_DIR, '5-events.png') });
 
+  // --- new visual features ---
+
+  // POV mode at the drop with notes flying
+  await page.evaluate(() => (window as any).__vivified.setBeat(105));
+  await page.click('#btn-pov');
+  await page.waitForTimeout(700);
+  const sPov = await page.evaluate(() => (window as any).__vivified.getState());
+  console.log('pov beat 105:', { visibleNotes: sPov.visibleNotes, animatedMaterials: sPov.animatedMaterials });
+  await page.screenshot({ path: join(OUT_DIR, '6-pov-notes.png') });
+  await page.click('#btn-pov');
+
+  // keyframe authoring: select intro instance, write a key at beat 12
+  await page.evaluate(() => (window as any).__vivified.setBeat(10));
+  await page.waitForTimeout(200);
+  await page.evaluate(() => (window as any).__vivified.selectInstance('prefab_intro_2'));
+  await page.waitForTimeout(200);
+  await page.evaluate(() => {
+    (window as any).__vivified.setBeat(12);
+    (window as any).__vivified.addKey();
+  });
+  await page.waitForTimeout(300);
+  const sKey = await page.evaluate(() => (window as any).__vivified.getState());
+  console.log('after addKey:', { status: sKey.status, keyBeats: sKey.keyBeats, events: sKey.events });
+
+  // material inspector with live property editing
+  await page.click('button[data-tab="assets"]');
+  await page.evaluate(() =>
+    (window as any).__vivified.inspectMaterial('assets/aether/materials/custom objects/saber/saber trail.mat')
+  );
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(OUT_DIR, '7-material.png') });
+
   const checks = {
     'instances == 6': s10.instances === 6,
     'intro active at 10': s10.active.includes('prefab_intro_2'),
@@ -106,6 +138,9 @@ async function main(): Promise<void> {
     'intro gone at 100': !s100.active.includes('prefab_intro_2'),
     'assets loaded': stateAfterBundle.assets >= 30,
     'events loaded': s10.events === 2214,
+    'notes visible in pov': sPov.visibleNotes > 0,
+    'material animations registered': sPov.animatedMaterials > 0,
+    'keyframe written': String(sKey.status).includes('keyed') && sKey.keyBeats.length > 0,
   };
   let failed = 0;
   for (const [name, ok] of Object.entries(checks)) {
