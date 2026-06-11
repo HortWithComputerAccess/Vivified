@@ -14,6 +14,7 @@ interface BoundClip {
 }
 
 export type GizmoMode = 'translate' | 'rotate' | 'scale';
+export type ViewMode = 'rendered' | 'indexed' | 'unshaded';
 
 interface InstanceNode {
   instance: PrefabInstance;
@@ -132,6 +133,46 @@ export class Viewport {
     this.gizmo.setMode(mode);
   }
 
+  // --- view modes -------------------------------------------------------------
+  viewMode: ViewMode = 'rendered';
+
+  /** rendered = recreated game view; indexed = flat color per material;
+   *  unshaded = plain lit standard material. */
+  setViewMode(mode: ViewMode): void {
+    this.viewMode = mode;
+    this.applyViewMode();
+  }
+
+  private applyViewMode(): void {
+    const mode = this.viewMode;
+    const swap = (container: THREE.Object3D) => {
+      container.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (mesh.isMesh) {
+          // remember the original (rendered) material once
+          if (!mesh.userData.renderedMaterial) {
+            mesh.userData.renderedMaterial = mesh.material;
+          }
+          const rendered = mesh.userData.renderedMaterial as THREE.Material | THREE.Material[];
+          if (mode === 'rendered' || !this.converter) {
+            mesh.material = rendered;
+          } else {
+            const conv = this.converter;
+            mesh.material = Array.isArray(rendered)
+              ? rendered.map((m) => conv.viewVariant(m, mode))
+              : conv.viewVariant(rendered, mode);
+          }
+        }
+        // particle clouds only belong in the recreated game view
+        if ((o as THREE.Points).isPoints && o.userData.particle) {
+          o.visible = mode === 'rendered';
+        }
+      });
+    };
+    swap(this.instancesGroup);
+    swap(this.previewGroup);
+  }
+
   /** Preview a prefab at origin without creating an event. */
   showPreview(assetPath: string | null): void {
     this.previewGroup.clear();
@@ -140,6 +181,7 @@ export class Viewport {
       if (obj) this.previewGroup.add(obj);
     }
     this.collectAnimated();
+    this.applyViewMode();
   }
 
   // --- unity clip + particle playback ---------------------------------------
@@ -293,6 +335,7 @@ export class Viewport {
       }
     }
     this.collectAnimated();
+    this.applyViewMode();
   }
 
   private applyTransform(node: InstanceNode, engine: TrackEngine, beat: number): void {

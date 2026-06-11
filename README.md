@@ -37,6 +37,7 @@ Use **Chrome or Edge** — saving in place uses the File System Access API
 | Inspect textures | Click a texture in the Assets tab for a full preview (DXT1/5, BC4/5, BC7 and uncompressed formats decode in-browser). |
 | Notes preview | **Notes** toggles notes, bombs, chains and walls flying at the player with correct jump math, map color scheme, Noodle coordinates, and `AssignObjectPrefab` note skins tinted per color. Note tracks follow `AssignPathAnimation` offsetPosition and `AnimateTrack` offset/dissolve/scale. |
 | Player POV | **POV** switches to the player's first-person view, following `AssignPlayerToTrack` animation, with sabers (custom saber prefabs when assigned). |
+| View modes | **1 Rendered** recreates the game look (shader recreation, particles, glow). **2 Indexed** renders flat unlit with one distinct color per material — ideal for telling parts apart. **3 Unshaded** uses a plain lit material everywhere for clean geometry inspection. |
 
 The viewport evaluates the Heck animation engine over time: `AnimateTrack`
 (position/rotation/scale/dissolve with point definitions, easings, splines, repeat),

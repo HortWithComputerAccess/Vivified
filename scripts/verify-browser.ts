@@ -123,6 +123,22 @@ async function main(): Promise<void> {
   const sKey = await page.evaluate(() => (window as any).__vivified.getState());
   console.log('after addKey:', { status: sKey.status, keyBeats: sKey.keyBeats, events: sKey.events });
 
+  // view modes at the drop
+  await page.evaluate(() => (window as any).__vivified.setBeat(100));
+  await page.waitForTimeout(400);
+  await page.evaluate(() => (window as any).__vivified.setViewMode('indexed'));
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(OUT_DIR, '8-indexed.png') });
+  await page.evaluate(() => (window as any).__vivified.setViewMode('unshaded'));
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: join(OUT_DIR, '9-unshaded.png') });
+  const modeState = await page.evaluate(() => {
+    const sel = document.querySelector('#view-mode') as HTMLSelectElement;
+    return sel.value;
+  });
+  await page.evaluate(() => (window as any).__vivified.setViewMode('rendered'));
+  await page.waitForTimeout(200);
+
   // material inspector with live property editing
   await page.click('button[data-tab="assets"]');
   await page.evaluate(() =>
@@ -141,6 +157,7 @@ async function main(): Promise<void> {
     'notes visible in pov': sPov.visibleNotes > 0,
     'material animations registered': sPov.animatedMaterials > 0,
     'keyframe written': String(sKey.status).includes('keyed') && sKey.keyBeats.length > 0,
+    'view mode select syncs': modeState === 'unshaded',
   };
   let failed = 0;
   for (const [name, ok] of Object.entries(checks)) {

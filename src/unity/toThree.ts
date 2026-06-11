@@ -146,8 +146,55 @@ export class ThreeConverter {
     if (cached) return cached;
     const info = this.materialInfo(matPathID);
     const result = info ? this.buildMaterial(info.parsed, info.shader) : defaultMaterial();
+    result.userData.matPathID = matPathID;
     this.materialCache.set(matPathID, result);
     return result;
+  }
+
+  // --- view-mode material variants ------------------------------------------
+  private variants = new WeakMap<THREE.Material, { indexed?: THREE.Material; unshaded?: THREE.Material }>();
+  private paletteIndices = new Map<number | string, number>();
+  private nextPaletteIndex = 0;
+
+  /**
+   * Alternate material for a view mode:
+   * - indexed: flat unlit, one distinct palette color per source material
+   * - unshaded: plain standard-lit with base color + texture, no shader tricks
+   */
+  viewVariant(mat: THREE.Material, mode: 'indexed' | 'unshaded'): THREE.Material {
+    let entry = this.variants.get(mat);
+    if (!entry) {
+      entry = {};
+      this.variants.set(mat, entry);
+    }
+    if (entry[mode]) return entry[mode]!;
+
+    let variant: THREE.Material;
+    if (mode === 'indexed') {
+      const key = (mat.userData.matPathID as number) ?? mat.uuid;
+      let idx = this.paletteIndices.get(key);
+      if (idx === undefined) {
+        idx = this.nextPaletteIndex++;
+        this.paletteIndices.set(key, idx);
+      }
+      const color = new THREE.Color().setHSL((idx * 0.618034) % 1, 0.72, 0.55);
+      variant = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
+      variant.name = `${mat.name} [indexed ${idx}]`;
+    } else {
+      const base = (mat.userData.baseColor as number[]) ?? [0.8, 0.8, 0.8, 1];
+      const std = new THREE.MeshStandardMaterial({
+        color: unityColor(base),
+        roughness: 0.65,
+        metalness: 0,
+        side: THREE.DoubleSide,
+      });
+      const map = (mat as THREE.MeshStandardMaterial).map;
+      if (map) std.map = map;
+      std.name = `${mat.name} [unshaded]`;
+      variant = std;
+    }
+    entry[mode] = variant;
+    return variant;
   }
 
   /**

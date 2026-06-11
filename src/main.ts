@@ -15,7 +15,7 @@ import {
   LoadedDifficulty,
 } from './map/mapio';
 import { CustomEvent, ALL_EVENT_TYPES } from './map/types';
-import { Viewport, GizmoMode } from './editor/viewport';
+import { Viewport, GizmoMode, ViewMode } from './editor/viewport';
 import { Timeline } from './editor/timeline';
 import { EventListPanel, Inspector, AssetBrowser, makeEventFromTemplate } from './editor/panels';
 import { SongPlayer } from './editor/audio';
@@ -505,6 +505,14 @@ $('#btn-pov').addEventListener('click', () => {
   $('#btn-pov').classList.toggle('active', viewport.povMode);
 });
 
+const viewModeSelect = $('#view-mode') as HTMLSelectElement;
+function setViewMode(mode: ViewMode): void {
+  viewport.setViewMode(mode);
+  viewModeSelect.value = mode;
+  status(`view mode: ${mode}`);
+}
+viewModeSelect.addEventListener('change', () => setViewMode(viewModeSelect.value as ViewMode));
+
 // add-event popup
 $('#btn-add-event').addEventListener('click', (e) => {
   if (!diff) {
@@ -597,6 +605,12 @@ window.addEventListener('keydown', (e) => {
     viewport.focusSelected();
   } else if (e.code === 'KeyK') {
     addKeyNow();
+  } else if (e.code === 'Digit1') {
+    setViewMode('rendered');
+  } else if (e.code === 'Digit2') {
+    setViewMode('indexed');
+  } else if (e.code === 'Digit3') {
+    setViewMode('unshaded');
   } else if (e.code === 'Delete') {
     const ev = inspector.event;
     if (ev) inspector.onDelete(ev);
@@ -693,6 +707,7 @@ status('ready — open a map folder (needs Info.dat) or a .vivify bundle');
     if (inst) selectEvent(inst.event);
   },
   addKey: addKeyNow,
+  setViewMode,
   inspectMaterial(path: string): void {
     if (converter) inspector.showMaterial(path, converter);
   },
