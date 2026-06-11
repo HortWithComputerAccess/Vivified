@@ -3,11 +3,13 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { ThreeConverter, unityEulerToQuaternion } from '../unity/toThree';
 import { TrackEngine, PrefabInstance } from '../anim/tracks';
-import { ParsedClip, sampleVec, sampleQuat } from '../unity/animationClip';
+import { ParsedClip, sampleVec, sampleQuat, crc32 } from '../unity/animationClip';
 import { sampleParticles, ParticleParams } from '../unity/particles';
 
 interface BoundClip {
   clip: ParsedClip;
+  /** song time when this clip starts (prefab spawn time; 0 for previews) */
+  startSeconds: number;
   targets: { obj: THREE.Object3D; binding: ParsedClip['bindings'][number] }[];
 }
 
@@ -143,34 +145,55 @@ export class Viewport {
   // --- unity clip + particle playback ---------------------------------------
   private boundClips: BoundClip[] = [];
   private particleTargets: THREE.Points[] = [];
+  /** set by the app so section clips start at their prefab's spawn time */
+  beatToSeconds: (beat: number) => number = () => 0;
 
   /** Gather AnimationClip roots and particle systems after scene changes. */
   private collectAnimated(): void {
     this.boundClips = [];
     this.particleTargets = [];
-    const scan = (container: THREE.Object3D) => {
+    const scan = (container: THREE.Object3D, startSeconds = 0) => {
       container.traverse((o) => {
         const clip = o.userData.animClip as ParsedClip | undefined;
         if (clip) {
+          // release clips bind by CRC32 of the transform path relative to the
+          // Animator object; hash every descendant path to match
+          const basePath = (o.userData.uPath as string) ?? '';
+          const byHash = new Map<number, THREE.Object3D>();
+          byHash.set(0, o);
+          o.traverse((d) => {
+            const p = d.userData.uPath as string | undefined;
+            if (typeof p !== 'string' || d === o) return;
+            const rel = basePath && p.startsWith(basePath + '/') ? p.slice(basePath.length + 1) : p;
+            byHash.set(crc32(rel), d);
+          });
           const targets: BoundClip['targets'] = [];
           for (const binding of clip.bindings) {
-            const target = binding.path === '' ? o : findByPath(o, binding.path);
+            let target: THREE.Object3D | null = null;
+            if (binding.pathHash !== null) {
+              target = byHash.get(binding.pathHash) ?? null;
+            } else {
+              target = binding.path === '' ? o : findByPath(o, binding.path);
+            }
             if (target) targets.push({ obj: target, binding });
           }
-          if (targets.length) this.boundClips.push({ clip, targets });
+          if (targets.length) this.boundClips.push({ clip, startSeconds, targets });
         }
         if ((o as THREE.Points).isPoints && o.userData.particle) {
           this.particleTargets.push(o as THREE.Points);
         }
       });
     };
-    scan(this.instancesGroup);
-    scan(this.previewGroup);
+    for (const node of this.instanceNodes) {
+      scan(node.root, this.beatToSeconds(node.instance.spawnBeat));
+    }
+    scan(this.previewGroup, 0);
   }
 
   private applyClips(timeSeconds: number): void {
-    for (const { clip, targets } of this.boundClips) {
-      const t = clip.loop || clip.length <= 0 ? ((timeSeconds % clip.length) + clip.length) % clip.length : Math.min(timeSeconds, clip.length);
+    for (const { clip, startSeconds, targets } of this.boundClips) {
+      const local = Math.max(timeSeconds - startSeconds, 0);
+      const t = clip.loop || clip.length <= 0 ? ((local % clip.length) + clip.length) % clip.length : Math.min(local, clip.length);
       for (const { obj, binding } of targets) {
         if (binding.position) {
           const v = sampleVec(binding.position, t);

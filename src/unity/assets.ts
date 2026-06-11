@@ -172,6 +172,8 @@ export interface UGameObject {
   active: boolean;
   transform: UTransform;
   meshPathID: number | null;
+  /** built-in primitive name when the mesh lives in unity default resources */
+  meshBuiltin: 'Cube' | 'Cylinder' | 'Sphere' | 'Capsule' | 'Plane' | 'Quad' | null;
   materialPathIDs: number[];
   /** Animator's AnimatorController pathID, if this object has one */
   animatorControllerPathID: number | null;
@@ -199,6 +201,7 @@ export function buildGameObjectTree(db: AssetDB, goPathID: number): UGameObject 
       scale: { x: 1, y: 1, z: 1 },
     },
     meshPathID: null,
+    meshBuiltin: null,
     materialPathIDs: [],
     animatorControllerPathID: null,
     particleSystemPathID: null,
@@ -219,7 +222,14 @@ export function buildGameObjectTree(db: AssetDB, goPathID: number): UGameObject 
       transformPtr = comp;
     } else if (cls === ClassID.MeshFilter) {
       const mf = db.deref(comp) as any;
-      if (mf?.m_Mesh?.m_PathID) result.meshPathID = mf.m_Mesh.m_PathID;
+      const meshPtr = mf?.m_Mesh;
+      if (meshPtr?.m_PathID) {
+        if (meshPtr.m_FileID === 0) {
+          result.meshPathID = meshPtr.m_PathID;
+        } else {
+          result.meshBuiltin = builtinMeshName(db, comp, meshPtr);
+        }
+      }
     } else if (cls === ClassID.MeshRenderer || cls === ClassID.SkinnedMeshRenderer) {
       const mr = db.deref(comp) as any;
       if (cls === ClassID.SkinnedMeshRenderer && mr?.m_Mesh?.m_PathID) {
@@ -267,6 +277,23 @@ export function buildGameObjectTree(db: AssetDB, goPathID: number): UGameObject 
   }
 
   return result;
+}
+
+/** Identify built-in primitives referenced from "unity default resources". */
+function builtinMeshName(db: AssetDB, componentPtr: PPtr, meshPtr: PPtr): UGameObject['meshBuiltin'] {
+  const entry = db.objects.get(componentPtr.m_PathID);
+  const externals = entry ? entry[0].externals : db.files[0]?.externals ?? [];
+  const extName = externals[meshPtr.m_FileID - 1] ?? '';
+  if (!/unity default resources/i.test(extName)) return null;
+  switch (meshPtr.m_PathID) {
+    case 10202: return 'Cube';
+    case 10206: return 'Cylinder';
+    case 10207: return 'Sphere';
+    case 10208: return 'Capsule';
+    case 10209: return 'Plane';
+    case 10210: return 'Quad';
+    default: return null;
+  }
 }
 
 function vec3(v: any, def = 0): { x: number; y: number; z: number } {

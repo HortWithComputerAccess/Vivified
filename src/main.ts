@@ -50,6 +50,7 @@ const envFx = new EnvironmentFx();
 viewport.scene.add(notes.group);
 viewport.camera.add(notes.saberGroup);
 viewport.scene.add(viewport.camera);
+viewport.beatToSeconds = (b) => bpm.secondsAt(b);
 
 let converter: ThreeConverter | null = null;
 let autoKey = false;

@@ -53,7 +53,12 @@ look — active `Blit`/camera effects are listed in the viewport HUD instead.
 
 **Also recreated in the browser view:**
 - Unity **AnimationClips**: prefabs with Animators play their controller's
-  clip (position/rotation/scale curves by path, looped, synced to song time).
+  clip — including the release-build "muscle clip" format (StreamedClip/
+  DenseClip/ConstantClip decoded, bindings resolved by CRC32 path hashes),
+  starting at the prefab's spawn beat and synced to song time.
+- Unity's **built-in primitive meshes** (Quad/Sphere/Plane/Cube/Cylinder/
+  Capsule from `unity default resources`) are substituted with three.js
+  geometry, so billboards and primitive-based children render.
 - **Particle systems**: each emitter renders an approximated particle cloud
   (shape, rate, lifetime, speed, size, start color, gravity, renderer
   material/texture and blending) animated with song time.

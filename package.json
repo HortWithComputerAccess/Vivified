@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:bundle": "tsx scripts/test-bundle.ts",
-    "test:map": "tsx scripts/test-map.ts"
+    "test:map": "tsx scripts/test-map.ts",
+    "test:clips": "tsx scripts/test-clips.ts"
   },
   "dependencies": {
     "three": "^0.165.0"

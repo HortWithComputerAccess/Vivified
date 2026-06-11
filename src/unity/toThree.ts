@@ -267,17 +267,17 @@ export class ThreeConverter {
 
   private buildObject(node: UGameObject, path = ''): THREE.Object3D {
     let obj: THREE.Object3D;
-    if (node.meshPathID) {
-      const geo = this.geometry(node.meshPathID);
-      if (geo) {
-        const mats = node.materialPathIDs.map((id) => this.material(id));
-        const material = mats.length === 0 ? defaultMaterial() : mats.length === 1 ? mats[0] : mats;
-        obj = new THREE.Mesh(geo, material);
-        obj.castShadow = true;
-        obj.receiveShadow = true;
-      } else {
-        obj = new THREE.Object3D();
-      }
+    const geo = node.meshPathID
+      ? this.geometry(node.meshPathID)
+      : node.meshBuiltin
+        ? builtinGeometry(node.meshBuiltin)
+        : null;
+    if (geo) {
+      const mats = node.materialPathIDs.map((id) => this.material(id));
+      const material = mats.length === 0 ? defaultMaterial() : mats.length === 1 ? mats[0] : mats;
+      obj = new THREE.Mesh(geo, material);
+      obj.castShadow = true;
+      obj.receiveShadow = true;
     } else {
       obj = new THREE.Object3D();
     }
@@ -363,6 +363,38 @@ export class ThreeConverter {
 
 function defaultMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color: 0x9b6ad6, roughness: 0.7, side: THREE.DoubleSide });
+}
+
+const builtinGeoCache = new Map<string, THREE.BufferGeometry>();
+
+/** three.js equivalents of Unity's built-in primitive meshes. */
+function builtinGeometry(name: NonNullable<UGameObject['meshBuiltin']>): THREE.BufferGeometry {
+  let geo = builtinGeoCache.get(name);
+  if (geo) return geo;
+  switch (name) {
+    case 'Cube':
+      geo = new THREE.BoxGeometry(1, 1, 1);
+      break;
+    case 'Sphere':
+      geo = new THREE.SphereGeometry(0.5, 24, 16);
+      break;
+    case 'Cylinder':
+      geo = new THREE.CylinderGeometry(0.5, 0.5, 2, 24);
+      break;
+    case 'Capsule':
+      geo = new THREE.CapsuleGeometry(0.5, 1, 6, 16);
+      break;
+    case 'Plane':
+      geo = new THREE.PlaneGeometry(10, 10, 1, 1).rotateX(-Math.PI / 2);
+      break;
+    case 'Quad':
+    default:
+      // unity quad faces -Z; after the z-mirror that's three's +Z
+      geo = new THREE.PlaneGeometry(1, 1);
+      break;
+  }
+  builtinGeoCache.set(name, geo);
+  return geo;
 }
 
 function clamp01(v: number): number {
