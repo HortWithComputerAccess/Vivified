@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vivified — Vivify Map Editor</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="toolbar">
+        <span class="logo">Vivified</span>
+        <button id="btn-open-map" title="Open a Beat Saber map folder (Info.dat)">Open Map</button>
+        <button id="btn-open-bundle" title="Open a .vivify AssetBundle file">Open Bundle</button>
+        <select id="difficulty-select" title="Difficulty"></select>
+        <span class="sep"></span>
+        <button id="btn-play" title="Play / pause (Space)">▶</button>
+        <span id="beat-display" title="Current beat">beat 0.00</span>
+        <input id="beat-input" type="number" step="0.25" min="0" value="0" title="Jump to beat" />
+        <span class="sep"></span>
+        <button id="btn-undo" title="Undo (Ctrl+Z)">↩</button>
+        <button id="btn-redo" title="Redo (Ctrl+Y)">↪</button>
+        <button id="btn-save" title="Save difficulty (Ctrl+S)">Save</button>
+        <span class="sep"></span>
+        <span class="gizmo-modes">
+          <button id="gizmo-translate" class="active" title="Move (W)">Move</button>
+          <button id="gizmo-rotate" title="Rotate (E)">Rot</button>
+          <button id="gizmo-scale" title="Scale (R)">Scale</button>
+        </span>
+        <span id="status"></span>
+      </header>
+      <div id="main">
+        <aside id="left-panel">
+          <div class="panel-tabs">
+            <button data-tab="assets" class="active">Assets</button>
+            <button data-tab="events">Events</button>
+          </div>
+          <div id="tab-assets" class="tab-page active">
+            <div id="asset-browser"><p class="hint">Open a map folder or .vivify bundle to list assets.</p></div>
+          </div>
+          <div id="tab-events" class="tab-page">
+            <div class="event-controls">
+              <input id="event-filter" type="text" placeholder="filter by type/track/asset…" />
+              <button id="btn-add-event" title="Add a new custom event at the current beat">+ Add</button>
+            </div>
+            <div id="event-list"></div>
+          </div>
+        </aside>
+        <div id="viewport-wrap">
+          <canvas id="viewport"></canvas>
+          <div id="viewport-hud"></div>
+        </div>
+        <aside id="right-panel">
+          <div id="inspector"><p class="hint">Select an event or a spawned object.</p></div>
+        </aside>
+      </div>
+      <div id="timeline-wrap">
+        <canvas id="timeline"></canvas>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
