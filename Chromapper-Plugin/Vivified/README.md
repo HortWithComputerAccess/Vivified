@@ -19,9 +19,31 @@ real shaders, no recreation needed.
   (Color/Float/Vector/Keyword, static and animated) to the actual bundle
   materials live — originals are restored when the preview is disabled or the
   editor exits.
+- **Blit** post-processing applied to the editor camera with the real bundle
+  materials (priority/pass ordering, per-event property animation).
+- **SetRenderingSettings** (fog, ambient, quality), **SetCameraProperty**
+  (clearFlags, backgroundColor, depthTextureMode), **CreateScreenTexture** and
+  **CreateCamera** (render textures published as shader globals),
+  **SetAnimatorProperty** (Bool/Float/Integer/Trigger on spawned prefabs),
+  and Texture-type properties (bundle textures or screen texture ids).
+- **Song-synced playback**: Animators, legacy Animations and particle systems
+  on spawned prefabs are driven from song-time-since-spawn — scrubbing and
+  rewinding work in both directions, and everything freezes when paused.
+  Optionally the plugin also freezes engine time while paused ("Freeze shader
+  time") so shaders animating on _Time stop too; this suspends itself while
+  the camera moves or a dialog is open.
+- **Authoring inside ChroMapper**: spawn any bundle prefab as an undoable
+  InstantiatePrefab event at the playhead; Edit Mode lets you click-select a
+  Vivify object in the 3D view and drag it to move it (writes back into the
+  event, undoable); position/rotation/scale fields, duplicate and delete; and
+  starter templates for every Vivify/Heck event type.
 - Toolbar buttons (right-side panel):
-  - **Vivified** dialog: preview toggle, world offset, reload bundle, rebuild.
+  - **Vivified** dialog: all of the above (toggles, offsets, spawn/add/edit).
   - **Custom data editor**: edit the selected object's custom JSON with undo.
+
+Not previewed: AssignObjectPrefab note/saber/wall skins (would require
+replacing ChroMapper's own object visuals) and AssignPathAnimation note paths.
+Both remain editable as events.
 
 ## Building
 

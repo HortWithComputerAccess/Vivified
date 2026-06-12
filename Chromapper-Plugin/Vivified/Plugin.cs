@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using Beatmap.Base;
@@ -50,21 +51,25 @@ namespace Vivified
 
         // --- preview dialog ------------------------------------------------------
 
+        private List<string> dialogPrefabPaths = new List<string>();
+        private int dialogPrefabIndex;
+        private int dialogTemplateIndex;
+
         private void OnPreviewButton()
         {
             if (PersistentUI.Instance == null) return;
-            if (previewDialog == null) CreatePreviewDialog();
-            RefreshPreviewStatus();
+            // built fresh every time so prefab lists and selection are current
+            CreatePreviewDialog();
             previewDialog.Open();
         }
 
         private void CreatePreviewDialog()
         {
+            var preview = VivifyPreview.Instance;
             previewDialog = PersistentUI.Instance.CreateNewDialogBox().WithTitle("Vivified");
-            previewDialog.DontDestroyOnClose();
 
             previewStatus = previewDialog.AddComponent<TextComponent>()
-                .WithInitialValue("Vivify preview");
+                .WithInitialValue(preview != null ? preview.Status : "Open a map in the editor first.");
 
             previewDialog.AddComponent<ToggleComponent>()
                 .WithLabel("Show Vivify prefabs / materials")
@@ -76,6 +81,16 @@ namespace Vivified
                 .WithInitialValue(VivifiedSettings.HideEnvironment)
                 .OnChanged((bool v) => { VivifiedSettings.HideEnvironment = v; });
 
+            previewDialog.AddComponent<ToggleComponent>()
+                .WithLabel("Freeze shader time while paused")
+                .WithInitialValue(VivifiedSettings.FreezeShaderTime)
+                .OnChanged((bool v) => { VivifiedSettings.FreezeShaderTime = v; });
+
+            previewDialog.AddComponent<ToggleComponent>()
+                .WithLabel("Edit mode (click to select, drag to move)")
+                .WithInitialValue(VivifiedSettings.EditMode)
+                .OnChanged((bool v) => { VivifiedSettings.EditMode = v; });
+
             AddOffsetField(previewDialog, "Sync offset (beats)", VivifiedSettings.BeatOffset,
                 v => VivifiedSettings.BeatOffset = v);
             AddOffsetField(previewDialog, "World offset X", VivifiedSettings.WorldOffset.x,
@@ -85,17 +100,70 @@ namespace Vivified
             AddOffsetField(previewDialog, "World offset Z", VivifiedSettings.WorldOffset.z,
                 v => VivifiedSettings.WorldOffset.z = v);
 
+            // spawning prefabs from the bundle
+            dialogPrefabPaths = preview != null ? preview.PrefabPaths() : new List<string>();
+            if (dialogPrefabPaths.Count > 0)
+            {
+                dialogPrefabIndex = Mathf.Clamp(dialogPrefabIndex, 0, dialogPrefabPaths.Count - 1);
+                previewDialog.AddComponent<DropdownComponent>()
+                    .WithOptions(dialogPrefabPaths.Select(p => p.Replace("assets/", "")).ToList()
+                        .ConvertAll(p => new TMP_Dropdown.OptionData(p)))
+                    .WithLabel("Bundle prefab")
+                    .WithInitialValue(dialogPrefabIndex)
+                    .OnChanged((int i) => { dialogPrefabIndex = i; });
+            }
+
+            // event templates for every Vivify/Heck event type
+            dialogTemplateIndex = Mathf.Clamp(dialogTemplateIndex, 0, VivifyPreview.EventTemplateTypes.Length - 1);
+            previewDialog.AddComponent<DropdownComponent>()
+                .WithOptions(VivifyPreview.EventTemplateTypes.ToList()
+                    .ConvertAll(t => new TMP_Dropdown.OptionData(t)))
+                .WithLabel("Event type")
+                .WithInitialValue(dialogTemplateIndex)
+                .OnChanged((int i) => { dialogTemplateIndex = i; });
+
+            // selected object editing
+            previewDialog.AddComponent<TextComponent>()
+                .WithInitialValue(preview != null ? preview.SelectedDescription() : "");
+            if (preview != null && preview.HasSelection)
+            {
+                AddVectorField(previewDialog, "position", preview);
+                AddVectorField(previewDialog, "rotation", preview);
+                AddVectorField(previewDialog, "scale", preview);
+            }
+
+            previewDialog.AddFooterButton(() =>
+            {
+                if (VivifyPreview.Instance != null && dialogPrefabPaths.Count > 0)
+                    VivifyPreview.Instance.SpawnPrefab(dialogPrefabPaths[dialogPrefabIndex]);
+            }, "Spawn Prefab");
+            previewDialog.AddFooterButton(() =>
+            {
+                if (VivifyPreview.Instance != null)
+                    VivifyPreview.Instance.InsertTemplate(VivifyPreview.EventTemplateTypes[dialogTemplateIndex]);
+            }, "Add Event");
+            previewDialog.AddFooterButton(() =>
+            {
+                if (VivifyPreview.Instance != null) VivifyPreview.Instance.DuplicateSelected();
+            }, "Duplicate");
+            previewDialog.AddFooterButton(() =>
+            {
+                if (VivifyPreview.Instance != null) VivifyPreview.Instance.DeleteSelected();
+            }, "Delete");
             previewDialog.AddFooterButton(() =>
             {
                 if (VivifyPreview.Instance != null) VivifyPreview.Instance.ReloadBundle();
-                RefreshPreviewStatus();
             }, "Reload Bundle");
-            previewDialog.AddFooterButton(() =>
-            {
-                if (VivifyPreview.Instance != null) VivifyPreview.Instance.QueueRebuild();
-                RefreshPreviewStatus();
-            }, "Rebuild Events");
             previewDialog.AddFooterButton(null, "Close");
+        }
+
+        private static void AddVectorField(DialogBox box, string key, VivifyPreview preview)
+        {
+            string fallback = key == "scale" ? "1, 1, 1" : "0, 0, 0";
+            box.AddComponent<TextBoxComponent>()
+                .WithLabel(key + " (x, y, z)")
+                .WithInitialValue(preview.GetSelectedField(key, fallback))
+                .OnEndEdit(s => preview.ApplySelectedField(key, s));
         }
 
         private static void AddOffsetField(DialogBox box, string label, float initial, Action<float> setter)

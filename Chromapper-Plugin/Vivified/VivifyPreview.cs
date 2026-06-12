@@ -18,6 +18,15 @@ namespace Vivified
         public static float BeatOffset = 0f;
         /// <summary>Hide ChroMapper's own platform/environment visuals.</summary>
         public static bool HideEnvironment = false;
+        /// <summary>
+        /// Freeze engine time (and therefore shader _Time animation) while
+        /// paused, so time-driven shaders stop with the song. Suspended while
+        /// the camera is moving or a dialog is open, since ChroMapper animates
+        /// those with scaled time.
+        /// </summary>
+        public static bool FreezeShaderTime = true;
+        /// <summary>Click to select / drag to move Vivify objects.</summary>
+        public static bool EditMode = false;
     }
 
     /// <summary>
@@ -27,7 +36,7 @@ namespace Vivified
     /// AnimateTrack / AssignTrackParent, and applies SetMaterialProperty /
     /// SetGlobalProperty values live.
     /// </summary>
-    public class VivifyPreview : MonoBehaviour
+    public partial class VivifyPreview : MonoBehaviour
     {
         public static VivifyPreview Instance { get; private set; }
 
@@ -46,6 +55,7 @@ namespace Vivified
         {
             public GameObject Go;
             public Animator[] Animators;
+            public Animation[] LegacyAnims;
             public ParticleSystem[] Particles;
             public float SpawnSeconds;
         }
@@ -109,6 +119,7 @@ namespace Vivified
             RestoreEnvironment();
             if (depthModeChanged && depthCamera != null)
                 depthCamera.depthTextureMode = originalDepthMode;
+            CleanupExtras();
             ClearInstances();
             if (root != null) Destroy(root.gameObject);
             if (bundle != null)
@@ -265,6 +276,12 @@ namespace Vivified
             SyncTimedComponents(seconds, jumped, playStateChanged);
             ApplyMaterialProperties(beat);
             ApplyGlobalProperties(beat);
+            UpdateBlits(beat);
+            ApplyRenderSettingsNow(beat);
+            ApplyCameraState(beat);
+            ApplyAnimatorProps(beat);
+            UpdateTimeFreeze();
+            UpdateEditing();
 
             prevSeconds = seconds;
             prevPlaying = atsc.IsPlaying;
@@ -299,6 +316,28 @@ namespace Vivified
                         animator.speed = 0f;
                         animator.Play(info.fullPathHash, 0, norm);
                         animator.Update(0f);
+                    }
+                }
+
+                // legacy Animation components also run on wall-clock by default
+                if (state.LegacyAnims != null)
+                {
+                    for (int i = 0; i < state.LegacyAnims.Length; i++)
+                    {
+                        var anim = state.LegacyAnims[i];
+                        if (anim == null || anim.clip == null) continue;
+                        var clip = anim.clip;
+                        var animState = anim[clip.name];
+                        if (animState == null) continue;
+                        float t = clip.isLooping && clip.length > 0f
+                            ? Mathf.Repeat(elapsed, clip.length)
+                            : Mathf.Min(elapsed, clip.length);
+                        animState.enabled = true;
+                        animState.weight = 1f;
+                        animState.speed = 0f;
+                        animState.time = t;
+                        anim.Sample();
+                        animState.enabled = false;
                     }
                 }
 
@@ -488,9 +527,13 @@ namespace Vivified
                 {
                     Go = go,
                     Animators = go.GetComponentsInChildren<Animator>(true),
+                    LegacyAnims = go.GetComponentsInChildren<Animation>(true),
                     Particles = go.GetComponentsInChildren<ParticleSystem>(true),
                     SpawnSeconds = SecondsAtJsonBeat(spawn.SpawnBeat),
                 };
+                for (int i = 0; i < state.LegacyAnims.Length; i++)
+                    if (state.LegacyAnims[i] != null)
+                        state.LegacyAnims[i].playAutomatically = false;
                 for (int i = 0; i < state.Animators.Length; i++)
                     if (state.Animators[i] != null)
                         state.Animators[i].speed = 0f;
@@ -550,7 +593,7 @@ namespace Vivified
             {
                 var spawn = pair.Key;
                 var go = pair.Value.Go;
-                if (go == null) continue;
+                if (go == null || IsDraggingInstance(spawn)) continue;
 
                 Vector3 pos = spawn.Position;
                 Vector3 rot = spawn.Rotation;
@@ -597,6 +640,17 @@ namespace Vivified
                 {
                     string id = propPair.Key;
                     var first = propPair.Value[0];
+                    if (first.Type == "Texture")
+                    {
+                        var texEvent = TrackEngine.CurrentEvent(propPair.Value, beat);
+                        if (texEvent != null && texEvent.StaticValue != null && texEvent.StaticValue.IsString &&
+                            mat.HasProperty(id))
+                        {
+                            var tex = GetTextureValue(texEvent.StaticValue.Value);
+                            if (tex != null) mat.SetTexture(id, tex);
+                        }
+                        continue;
+                    }
                     int dim = (first.Type == "Color" || first.Type == "Vector") ? 4 : 1;
                     var v = TrackEngine.CurrentValue(propPair.Value, beat, dim);
                     if (v == null)
@@ -634,6 +688,16 @@ namespace Vivified
             {
                 string id = propPair.Key;
                 var first = propPair.Value[0];
+                if (first.Type == "Texture")
+                {
+                    var texEvent = TrackEngine.CurrentEvent(propPair.Value, beat);
+                    if (texEvent != null && texEvent.StaticValue != null && texEvent.StaticValue.IsString)
+                    {
+                        var tex = GetTextureValue(texEvent.StaticValue.Value);
+                        if (tex != null) Shader.SetGlobalTexture(id, tex);
+                    }
+                    continue;
+                }
                 int dim = (first.Type == "Color" || first.Type == "Vector") ? 4 : 1;
                 var v = TrackEngine.CurrentValue(propPair.Value, beat, dim);
                 if (v == null)

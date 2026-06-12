@@ -51,6 +51,14 @@
       <HintPath>$(ChroMapperDir)\ChroMapper_Data\Managed\UnityEngine.ParticleSystemModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ChroMapperDir)\ChroMapper_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ChroMapperDir)\ChroMapper_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.UI">
       <HintPath>$(ChroMapperDir)\ChroMapper_Data\Managed\UnityEngine.UI.dll</HintPath>
       <Private>false</Private>
@@ -67,10 +75,17 @@
       <HintPath>$(ChroMapperDir)\ChroMapper_Data\Managed\Plugins.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="LiteNetLib">
+      <HintPath>$(ChroMapperDir)\ChroMapper_Data\Managed\LiteNetLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="BlitRenderer.cs" />
     <Compile Include="Heck.cs" />
     <Compile Include="Plugin.cs" />
+    <Compile Include="VivifyAuthoring.cs" />
+    <Compile Include="VivifyExtras.cs" />
     <Compile Include="VivifyPreview.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

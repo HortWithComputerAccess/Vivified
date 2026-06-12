@@ -253,6 +253,52 @@ namespace Vivified
         public PointDefinition Def;
     }
 
+    public class BlitEvent
+    {
+        public float Beat;
+        public float Duration;
+        public int Priority;
+        public int Pass = -1;
+        public string Asset;
+    }
+
+    public class ScreenTextureDef
+    {
+        public float Beat;
+        public string Id;
+        public float XRatio = 1f;
+        public float YRatio = 1f;
+        public int Width;
+        public int Height;
+    }
+
+    public class CameraDef
+    {
+        public float Beat;
+        public string Id;
+        public string Texture;
+        public string DepthTexture;
+    }
+
+    public class CameraPropEvent
+    {
+        public float Beat;
+        public string ClearFlags;
+        public float[] BackgroundColor;
+    }
+
+    public class AnimatorPropEvent
+    {
+        public float Beat;
+        public float Duration;
+        public string EasingName;
+        public string TargetId;
+        public string Id;
+        public string Type; // Bool | Float | Integer | Trigger
+        public JSONNode StaticValue;
+        public PointDefinition Def;
+    }
+
     /// <summary>
     /// Evaluates Vivify/Heck state over beats: prefab spawn lifetimes,
     /// AnimateTrack transforms, parent chains, and material/global properties.
@@ -279,6 +325,14 @@ namespace Vivified
             new Dictionary<string, Dictionary<string, List<MaterialPropertyEvent>>>();
         public readonly Dictionary<string, List<MaterialPropertyEvent>> GlobalEvents =
             new Dictionary<string, List<MaterialPropertyEvent>>();
+        public readonly List<BlitEvent> Blits = new List<BlitEvent>();
+        /// <summary>"category.field" -> events, e.g. "renderSettings.fogColor"</summary>
+        public readonly Dictionary<string, List<MaterialPropertyEvent>> RenderSettingEvents =
+            new Dictionary<string, List<MaterialPropertyEvent>>();
+        public readonly List<ScreenTextureDef> ScreenTextures = new List<ScreenTextureDef>();
+        public readonly List<CameraDef> Cameras = new List<CameraDef>();
+        public readonly List<CameraPropEvent> CameraProps = new List<CameraPropEvent>();
+        public readonly List<AnimatorPropEvent> AnimatorProps = new List<AnimatorPropEvent>();
 
         private readonly Dictionary<string, Dictionary<string, List<TimelineEntry>>> timelines =
             new Dictionary<string, Dictionary<string, List<TimelineEntry>>>();
@@ -290,6 +344,12 @@ namespace Vivified
             timelines.Clear();
             MaterialEvents.Clear();
             GlobalEvents.Clear();
+            Blits.Clear();
+            RenderSettingEvents.Clear();
+            ScreenTextures.Clear();
+            Cameras.Clear();
+            CameraProps.Clear();
+            AnimatorProps.Clear();
 
             int autoId = 0;
             foreach (var ev in events.OrderBy(e => e.JsonTime))
@@ -382,6 +442,134 @@ namespace Vivified
                     {
                         if (!d.HasKey("properties")) break;
                         AddPropertyEvents(GlobalEvents, ev, d, pointDefinitions);
+                        break;
+                    }
+                    case "SetRenderingSettings":
+                    {
+                        // categories: renderSettings / qualitySettings / xrSettings
+                        foreach (var category in d.Keys)
+                        {
+                            if (category == "duration" || category == "easing") continue;
+                            var cat = d[category];
+                            if (cat == null || !cat.IsObject) continue;
+                            foreach (var field in cat.Keys)
+                            {
+                                string key = category + "." + field;
+                                var value = cat[field];
+                                bool isColor = field.EndsWith("Color") || field == "ambientLight";
+                                int dim = isColor ? 4 : 1;
+                                PointDefinition def = null;
+                                if (value != null && (value.IsArray || value.IsString))
+                                    def = PointDefinition.Parse(value, dim, pointDefinitions);
+                                List<MaterialPropertyEvent> list;
+                                if (!RenderSettingEvents.TryGetValue(key, out list))
+                                    RenderSettingEvents[key] = list = new List<MaterialPropertyEvent>();
+                                list.Add(new MaterialPropertyEvent
+                                {
+                                    Beat = ev.JsonTime,
+                                    Duration = d.HasKey("duration") ? d["duration"].AsFloat : 0f,
+                                    EasingName = d.HasKey("easing") ? d["easing"].Value : null,
+                                    Id = key,
+                                    Type = isColor ? "Color" : "Float",
+                                    StaticValue = value,
+                                    Def = def,
+                                });
+                            }
+                        }
+                        break;
+                    }
+                    case "CreateScreenTexture":
+                    {
+                        ScreenTextures.Add(new ScreenTextureDef
+                        {
+                            Beat = ev.JsonTime,
+                            Id = d["id"].Value,
+                            XRatio = d.HasKey("xRatio") ? d["xRatio"].AsFloat : 1f,
+                            YRatio = d.HasKey("yRatio") ? d["yRatio"].AsFloat : 1f,
+                            Width = d.HasKey("width") ? d["width"].AsInt : 0,
+                            Height = d.HasKey("height") ? d["height"].AsInt : 0,
+                        });
+                        break;
+                    }
+                    case "CreateCamera":
+                    {
+                        Cameras.Add(new CameraDef
+                        {
+                            Beat = ev.JsonTime,
+                            Id = d["id"].Value,
+                            Texture = d.HasKey("texture") ? d["texture"].Value : null,
+                            DepthTexture = d.HasKey("depthTexture") ? d["depthTexture"].Value : null,
+                        });
+                        break;
+                    }
+                    case "SetCameraProperty":
+                    {
+                        var props = d["properties"];
+                        if (props == null || !props.IsObject) break;
+                        var cp = new CameraPropEvent { Beat = ev.JsonTime };
+                        if (props.HasKey("clearFlags")) cp.ClearFlags = props["clearFlags"].Value;
+                        if (props.HasKey("backgroundColor"))
+                        {
+                            var arr = props["backgroundColor"].AsArray;
+                            if (arr != null && arr.Count >= 3)
+                                cp.BackgroundColor = new[]
+                                {
+                                    arr[0].AsFloat, arr[1].AsFloat, arr[2].AsFloat,
+                                    arr.Count > 3 ? arr[3].AsFloat : 1f,
+                                };
+                        }
+                        if (cp.ClearFlags != null || cp.BackgroundColor != null) CameraProps.Add(cp);
+                        break;
+                    }
+                    case "SetAnimatorProperty":
+                    {
+                        string targetId = d["id"].Value;
+                        if (string.IsNullOrEmpty(targetId) || !d.HasKey("properties")) break;
+                        var props = d["properties"].AsArray;
+                        if (props == null) break;
+                        for (int i = 0; i < props.Count; i++)
+                        {
+                            var p = props[i];
+                            if (string.IsNullOrEmpty(p["id"].Value)) continue;
+                            string type = p.HasKey("type") ? p["type"].Value : "Float";
+                            PointDefinition def = null;
+                            var value = p["value"];
+                            if (value != null && (value.IsArray || value.IsString))
+                                def = PointDefinition.Parse(value, 1, pointDefinitions);
+                            AnimatorProps.Add(new AnimatorPropEvent
+                            {
+                                Beat = ev.JsonTime,
+                                Duration = d.HasKey("duration") ? d["duration"].AsFloat : 0f,
+                                EasingName = d.HasKey("easing") ? d["easing"].Value : null,
+                                TargetId = targetId,
+                                Id = p["id"].Value,
+                                Type = type,
+                                StaticValue = value,
+                                Def = def,
+                            });
+                        }
+                        break;
+                    }
+                    case "Blit":
+                    {
+                        string asset = d["asset"].Value;
+                        if (string.IsNullOrEmpty(asset)) break;
+                        Blits.Add(new BlitEvent
+                        {
+                            Beat = ev.JsonTime,
+                            Duration = d.HasKey("duration") ? d["duration"].AsFloat : 0f,
+                            Priority = d.HasKey("priority") ? d["priority"].AsInt : 0,
+                            Pass = d.HasKey("pass") ? d["pass"].AsInt : -1,
+                            Asset = asset,
+                        });
+                        // Blit events can animate their material's properties too
+                        if (d.HasKey("properties"))
+                        {
+                            Dictionary<string, List<MaterialPropertyEvent>> perProp;
+                            if (!MaterialEvents.TryGetValue(asset, out perProp))
+                                MaterialEvents[asset] = perProp = new Dictionary<string, List<MaterialPropertyEvent>>();
+                            AddPropertyEvents(perProp, ev, d, pointDefinitions);
+                        }
                         break;
                     }
                 }
@@ -489,6 +677,18 @@ namespace Vivified
                 cur = next;
             }
             return chain;
+        }
+
+        /// <summary>Latest property event at or before the beat.</summary>
+        public static MaterialPropertyEvent CurrentEvent(List<MaterialPropertyEvent> list, float beat)
+        {
+            MaterialPropertyEvent entry = null;
+            foreach (var e in list)
+            {
+                if (e.Beat <= beat) entry = e;
+                else break;
+            }
+            return entry;
         }
 
         /// <summary>Current value of a property event list at a beat (eased over duration).</summary>
