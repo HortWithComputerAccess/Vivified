@@ -334,20 +334,21 @@ namespace Vivified
         /// </summary>
         private void UpdateTimeFreeze()
         {
+            // Freezing while ChroMapper needs scaled time soft-locks the editor
+            // (scene-transition fades, dialogs, camera). Every exemption here is
+            // load-bearing; when in doubt, run at normal speed.
             bool freeze = VivifiedSettings.FreezeShaderTime &&
                           VivifiedSettings.PreviewEnabled &&
-                          atsc != null && !atsc.IsPlaying &&
+                          atsc != null && atsc.Initialized && !atsc.IsPlaying &&
+                          !SceneTransitionManager.IsLoading &&
                           (cameraController == null || !cameraController.MovingCamera) &&
                           (PersistentUI.Instance == null || !PersistentUI.Instance.DialogBoxIsEnabled);
             if (freeze)
             {
-                if (!timeScaleChanged)
-                {
-                    timeScaleChanged = true;
-                }
+                timeScaleChanged = true;
                 Time.timeScale = 0f;
             }
-            else if (timeScaleChanged)
+            else if (timeScaleChanged || Time.timeScale == 0f)
             {
                 Time.timeScale = 1f;
                 timeScaleChanged = false;

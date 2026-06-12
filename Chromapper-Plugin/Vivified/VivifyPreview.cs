@@ -19,12 +19,12 @@ namespace Vivified
         /// <summary>Hide ChroMapper's own platform/environment visuals.</summary>
         public static bool HideEnvironment = false;
         /// <summary>
-        /// Freeze engine time (and therefore shader _Time animation) while
-        /// paused, so time-driven shaders stop with the song. Suspended while
-        /// the camera is moving or a dialog is open, since ChroMapper animates
-        /// those with scaled time.
+        /// EXPERIMENTAL: freeze engine time (and therefore shader _Time
+        /// animation) while paused, so time-driven shaders stop with the song.
+        /// Suspended during scene loads, camera movement and dialogs, which
+        /// ChroMapper animates with scaled time. Off by default.
         /// </summary>
-        public static bool FreezeShaderTime = true;
+        public static bool FreezeShaderTime = false;
         /// <summary>Click to select / drag to move Vivify objects.</summary>
         public static bool EditMode = false;
     }
@@ -242,6 +242,17 @@ namespace Vivified
 
         private void Update()
         {
+            // run first and unconditionally: if anything below throws or early
+            // returns, a stuck Time.timeScale=0 would soft-lock the editor
+            try
+            {
+                UpdateTimeFreeze();
+            }
+            catch
+            {
+                Time.timeScale = 1f;
+            }
+
             if (VivifiedSettings.PreviewEnabled != lastEnabled)
             {
                 lastEnabled = VivifiedSettings.PreviewEnabled;
@@ -280,7 +291,6 @@ namespace Vivified
             ApplyRenderSettingsNow(beat);
             ApplyCameraState(beat);
             ApplyAnimatorProps(beat);
-            UpdateTimeFreeze();
             UpdateEditing();
 
             prevSeconds = seconds;
