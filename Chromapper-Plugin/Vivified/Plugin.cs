@@ -71,6 +71,13 @@ namespace Vivified
                 .WithInitialValue(VivifiedSettings.PreviewEnabled)
                 .OnChanged((bool v) => { VivifiedSettings.PreviewEnabled = v; });
 
+            previewDialog.AddComponent<ToggleComponent>()
+                .WithLabel("Hide default environment")
+                .WithInitialValue(VivifiedSettings.HideEnvironment)
+                .OnChanged((bool v) => { VivifiedSettings.HideEnvironment = v; });
+
+            AddOffsetField(previewDialog, "Sync offset (beats)", VivifiedSettings.BeatOffset,
+                v => VivifiedSettings.BeatOffset = v);
             AddOffsetField(previewDialog, "World offset X", VivifiedSettings.WorldOffset.x,
                 v => VivifiedSettings.WorldOffset.x = v);
             AddOffsetField(previewDialog, "World offset Y", VivifiedSettings.WorldOffset.y,

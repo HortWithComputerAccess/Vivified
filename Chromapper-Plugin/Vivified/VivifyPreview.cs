@@ -14,6 +14,10 @@ namespace Vivified
         public static bool PreviewEnabled = true;
         /// <summary>Beat Saber world origin relative to ChroMapper's world.</summary>
         public static Vector3 WorldOffset = new Vector3(0f, -0.5f, -1.5f);
+        /// <summary>Extra beats added to the evaluation time (sync fine-tuning).</summary>
+        public static float BeatOffset = 0f;
+        /// <summary>Hide ChroMapper's own platform/environment visuals.</summary>
+        public static bool HideEnvironment = false;
     }
 
     /// <summary>
@@ -38,12 +42,32 @@ namespace Vivified
             new Dictionary<Material, Dictionary<string, object>>();
         private readonly Dictionary<string, object> globalOriginals = new Dictionary<string, object>();
 
+        private class InstanceState
+        {
+            public GameObject Go;
+            public Animator[] Animators;
+            public ParticleSystem[] Particles;
+            public float SpawnSeconds;
+        }
+
         private readonly TrackEngine engine = new TrackEngine();
-        private readonly Dictionary<PrefabSpawn, GameObject> instances = new Dictionary<PrefabSpawn, GameObject>();
+        private readonly Dictionary<PrefabSpawn, InstanceState> instances = new Dictionary<PrefabSpawn, InstanceState>();
         private readonly Dictionary<string, Transform> trackNodes = new Dictionary<string, Transform>();
         private Transform root;
         private bool rebuildQueued = true;
         private bool lastEnabled = true;
+        private float prevSeconds = -1f;
+        private bool prevPlaying;
+
+        // default-environment hiding
+        private readonly List<Behaviour> hiddenBehaviours = new List<Behaviour>();
+        private readonly List<Renderer> hiddenRenderers = new List<Renderer>();
+        private bool envCurrentlyHidden;
+
+        // camera depth texture (many Vivify shaders sample _CameraDepthTexture)
+        private Camera depthCamera;
+        private DepthTextureMode originalDepthMode;
+        private bool depthModeChanged;
 
         public string Status { get; private set; } = "initializing";
 
@@ -82,6 +106,9 @@ namespace Vivified
             }
             RestoreMaterials();
             RestoreGlobals();
+            RestoreEnvironment();
+            if (depthModeChanged && depthCamera != null)
+                depthCamera.depthTextureMode = originalDepthMode;
             ClearInstances();
             if (root != null) Destroy(root.gameObject);
             if (bundle != null)
@@ -212,6 +239,7 @@ namespace Vivified
                     ClearInstances();
                     RestoreMaterials();
                     RestoreGlobals();
+                    RestoreEnvironment();
                 }
                 else QueueRebuild();
             }
@@ -223,12 +251,89 @@ namespace Vivified
                 RebuildEngine();
             }
             if (root != null) root.position = VivifiedSettings.WorldOffset;
+            ApplyEnvironmentHiding();
 
-            float beat = atsc.CurrentJsonTime;
+            float beat = atsc.CurrentJsonTime + VivifiedSettings.BeatOffset;
+            float seconds = atsc.CurrentSeconds;
+            // scrub/rewind detection: any non-continuous time change
+            bool jumped = prevSeconds >= 0f &&
+                          Mathf.Abs(seconds - prevSeconds) > Mathf.Max(Time.deltaTime * 4f, 0.25f);
+            bool playStateChanged = atsc.IsPlaying != prevPlaying;
+
             SyncInstances(beat);
             ApplyTransforms(beat);
+            SyncTimedComponents(seconds, jumped, playStateChanged);
             ApplyMaterialProperties(beat);
             ApplyGlobalProperties(beat);
+
+            prevSeconds = seconds;
+            prevPlaying = atsc.IsPlaying;
+        }
+
+        /// <summary>
+        /// Animators and particle systems normally run on wall-clock time from
+        /// the moment of instantiation, which drifts ahead of the notes and
+        /// breaks rewinding. Drive them from song-time-since-spawn instead so
+        /// scrubbing in either direction stays in sync.
+        /// </summary>
+        private void SyncTimedComponents(float seconds, bool jumped, bool playStateChanged)
+        {
+            foreach (var pair in instances)
+            {
+                var state = pair.Value;
+                if (state.Go == null) continue;
+                float elapsed = Mathf.Max(seconds - state.SpawnSeconds, 0f);
+
+                if (state.Animators != null)
+                {
+                    for (int i = 0; i < state.Animators.Length; i++)
+                    {
+                        var animator = state.Animators[i];
+                        if (animator == null || !animator.isActiveAndEnabled ||
+                            animator.runtimeAnimatorController == null) continue;
+                        var info = animator.GetCurrentAnimatorStateInfo(0);
+                        if (info.length <= 0f) continue;
+                        float norm = info.loop
+                            ? Mathf.Repeat(elapsed / info.length, 1f)
+                            : Mathf.Min(elapsed / info.length, 0.9999f);
+                        animator.speed = 0f;
+                        animator.Play(info.fullPathHash, 0, norm);
+                        animator.Update(0f);
+                    }
+                }
+
+                if (state.Particles != null && state.Particles.Length > 0)
+                {
+                    if (jumped || playStateChanged)
+                    {
+                        for (int i = 0; i < state.Particles.Length; i++)
+                        {
+                            var ps = state.Particles[i];
+                            if (ps == null) continue;
+                            // resimulate to the exact song position (works backwards too)
+                            ps.Simulate(elapsed, false, true);
+                            if (atsc.IsPlaying) ps.Play(false);
+                        }
+                    }
+                    else if (!atsc.IsPlaying)
+                    {
+                        for (int i = 0; i < state.Particles.Length; i++)
+                        {
+                            var ps = state.Particles[i];
+                            if (ps != null && ps.isPlaying) ps.Pause(false);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>Seconds position of a json beat, through the map's BPM events.</summary>
+        private float SecondsAtJsonBeat(float jsonBeat)
+        {
+            var map = BeatSaberSongContainer.Instance != null ? BeatSaberSongContainer.Instance.Map : null;
+            if (map == null || atsc == null) return 0f;
+            float? songBpm = map.JsonTimeToSongBpmTime(jsonBeat);
+            return atsc.GetSecondsFromBeat(songBpm.HasValue ? songBpm.Value : jsonBeat);
         }
 
         private void RebuildEngine()
@@ -237,9 +342,111 @@ namespace Vivified
             if (container == null || container.Map == null) return;
             engine.Rebuild(container.Map.CustomEvents, container.Map.PointDefinitions);
             ClearInstances();
+            DetectEnvironmentRemoval(container);
+            ApplyDepthTextureMode(container);
             Status = (bundle != null ? Path.GetFileName(bundlePath) + " · " : "") +
                      engine.Spawns.Count + " spawns · " +
                      engine.MaterialEvents.Count + " animated materials";
+        }
+
+        /// <summary>
+        /// Vivify maps usually blank out the base environment (Chroma
+        /// environment statements with active:false); mirror that by hiding
+        /// ChroMapper's platform visuals so only the bundle content shows.
+        /// </summary>
+        private void DetectEnvironmentRemoval(BeatSaberSongContainer container)
+        {
+            bool removes = false;
+            var enhancements = container.Map.EnvironmentEnhancements;
+            if (enhancements != null)
+                foreach (var env in enhancements)
+                    if (env != null && env.Active != null && env.Active.IsBoolean && !env.Active.AsBool)
+                    {
+                        removes = true;
+                        break;
+                    }
+            if (removes && !envDetectionDone) VivifiedSettings.HideEnvironment = true;
+            envDetectionDone = true;
+        }
+
+        private bool envDetectionDone;
+
+        private void ApplyEnvironmentHiding()
+        {
+            bool want = VivifiedSettings.HideEnvironment && VivifiedSettings.PreviewEnabled;
+            if (want == envCurrentlyHidden) return;
+            envCurrentlyHidden = want;
+
+            if (want)
+            {
+                var platform = LoadInitialMap.Platform;
+                if (platform == null) return;
+                foreach (var renderer in platform.gameObject.GetComponentsInChildren<Renderer>(false))
+                {
+                    if (renderer == null || !renderer.enabled) continue;
+                    renderer.enabled = false;
+                    hiddenRenderers.Add(renderer);
+                }
+                foreach (var light in platform.gameObject.GetComponentsInChildren<Light>(false))
+                {
+                    if (light == null || !light.enabled) continue;
+                    light.enabled = false;
+                    hiddenBehaviours.Add(light);
+                }
+            }
+            else
+            {
+                RestoreEnvironment();
+            }
+        }
+
+        private void RestoreEnvironment()
+        {
+            foreach (var renderer in hiddenRenderers)
+                if (renderer != null)
+                    renderer.enabled = true;
+            hiddenRenderers.Clear();
+            foreach (var behaviour in hiddenBehaviours)
+                if (behaviour != null)
+                    behaviour.enabled = true;
+            hiddenBehaviours.Clear();
+            envCurrentlyHidden = false;
+        }
+
+        /// <summary>
+        /// Many Vivify shaders sample _CameraDepthTexture; the map requests it
+        /// via SetCameraProperty/CreateCamera depthTextureMode. Without it the
+        /// editor camera renders those materials wrong.
+        /// </summary>
+        private void ApplyDepthTextureMode(BeatSaberSongContainer container)
+        {
+            bool wantDepth = false;
+            bool wantDepthNormals = false;
+            foreach (var ev in container.Map.CustomEvents)
+            {
+                if (ev.Type != "SetCameraProperty" && ev.Type != "CreateCamera") continue;
+                var props = ev.Data != null ? ev.Data["properties"] : null;
+                var modes = props != null ? props["depthTextureMode"] : null;
+                if (modes == null || !modes.IsArray) continue;
+                var arr = modes.AsArray;
+                for (int i = 0; i < arr.Count; i++)
+                {
+                    if (arr[i].Value == "Depth") wantDepth = true;
+                    if (arr[i].Value == "DepthNormals") wantDepthNormals = true;
+                }
+            }
+            if (!wantDepth && !wantDepthNormals) return;
+
+            var cam = Camera.main;
+            if (cam == null) return;
+            if (!depthModeChanged)
+            {
+                depthCamera = cam;
+                originalDepthMode = cam.depthTextureMode;
+                depthModeChanged = true;
+            }
+            if (wantDepth) cam.depthTextureMode |= DepthTextureMode.Depth;
+            if (wantDepthNormals) cam.depthTextureMode |= DepthTextureMode.DepthNormals;
         }
 
         private void SyncInstances(float beat)
@@ -253,7 +460,7 @@ namespace Vivified
                     toRemove.Add(pair.Key);
             foreach (var spawn in toRemove)
             {
-                if (instances[spawn] != null) Destroy(instances[spawn]);
+                if (instances[spawn].Go != null) Destroy(instances[spawn].Go);
                 instances.Remove(spawn);
             }
 
@@ -276,7 +483,26 @@ namespace Vivified
                 }
                 go.name = "Vivify:" + spawn.Id;
                 go.transform.SetParent(ParentForSpawn(spawn), false);
-                instances[spawn] = go;
+
+                var state = new InstanceState
+                {
+                    Go = go,
+                    Animators = go.GetComponentsInChildren<Animator>(true),
+                    Particles = go.GetComponentsInChildren<ParticleSystem>(true),
+                    SpawnSeconds = SecondsAtJsonBeat(spawn.SpawnBeat),
+                };
+                for (int i = 0; i < state.Animators.Length; i++)
+                    if (state.Animators[i] != null)
+                        state.Animators[i].speed = 0f;
+                // force timed components to the correct position immediately
+                float elapsed = Mathf.Max(atsc.CurrentSeconds - state.SpawnSeconds, 0f);
+                for (int i = 0; i < state.Particles.Length; i++)
+                    if (state.Particles[i] != null)
+                    {
+                        state.Particles[i].Simulate(elapsed, false, true);
+                        if (atsc.IsPlaying) state.Particles[i].Play(false);
+                    }
+                instances[spawn] = state;
             }
         }
 
@@ -323,7 +549,7 @@ namespace Vivified
             foreach (var pair in instances)
             {
                 var spawn = pair.Key;
-                var go = pair.Value;
+                var go = pair.Value.Go;
                 if (go == null) continue;
 
                 Vector3 pos = spawn.Position;
@@ -410,7 +636,18 @@ namespace Vivified
                 var first = propPair.Value[0];
                 int dim = (first.Type == "Color" || first.Type == "Vector") ? 4 : 1;
                 var v = TrackEngine.CurrentValue(propPair.Value, beat, dim);
-                if (v == null) continue;
+                if (v == null)
+                {
+                    // before the first event (rewound): restore the original
+                    object orig;
+                    if (globalOriginals.TryGetValue(id, out orig))
+                    {
+                        if (orig is Color) Shader.SetGlobalColor(id, (Color)orig);
+                        else if (orig is Vector4) Shader.SetGlobalVector(id, (Vector4)orig);
+                        else if (orig is float) Shader.SetGlobalFloat(id, (float)orig);
+                    }
+                    continue;
+                }
                 switch (first.Type)
                 {
                     case "Color":
@@ -497,8 +734,8 @@ namespace Vivified
         private void ClearInstances()
         {
             foreach (var pair in instances)
-                if (pair.Value != null)
-                    Destroy(pair.Value);
+                if (pair.Value.Go != null)
+                    Destroy(pair.Value.Go);
             instances.Clear();
             foreach (var pair in trackNodes)
                 if (pair.Value != null)
